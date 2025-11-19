@@ -34,7 +34,7 @@ type OnceGroup[K comparable, V any] struct {
 	m pb.MapOf[K, *call[V]]
 }
 
-// Do executes and returns the results of the given function, making
+// Do execute and returns the results of the given function, making
 // sure that only one execution is in-flight for a given key at a
 // time. If a duplicate comes in, the duplicate caller waits for the
 // original to complete and receives the same results.
@@ -59,9 +59,10 @@ func (g *OnceGroup[K, V]) Do(
 	)
 	if loaded {
 		c.wg.Wait()
-		if e, ok := c.err.(*panicError); ok {
+		var e *panicError
+		if errors.As(c.err, &e) {
 			panic(e)
-		} else if c.err == errGoexit {
+		} else if errors.Is(c.err, errGoexit) {
 			runtime.Goexit()
 		}
 		return c.val, c.err, true
@@ -165,15 +166,17 @@ func (g *OnceGroup[K, V]) doCall(
 		}
 
 		// After wg.Done, duplicates in Do() will wake and re-panic/goexit.
-		if e, ok := c.err.(*panicError); ok {
+		var e *panicError
+		if errors.As(c.err, &e) {
 			// Match x/sync: ensure panic is unrecoverable and visible.
 			if len(chs) > 0 {
+				//goland:noinspection All
 				go panic(e)
 				select {}
 			} else {
 				panic(e)
 			}
-		} else if c.err == errGoexit {
+		} else if errors.Is(c.err, errGoexit) {
 			// Primary goroutine already Goexit'ed; nothing to do here.
 		} else {
 			// Normal return: notify DoChan waiters.
