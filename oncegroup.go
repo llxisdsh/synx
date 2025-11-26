@@ -8,8 +8,6 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
-
-	"github.com/llxisdsh/pb"
 )
 
 // Result holds the results of Do, so they can be passed on a channel.
@@ -31,7 +29,7 @@ type call[V any] struct {
 // OnceGroup represents a class of work and forms a namespace in
 // which units of work can be executed with duplicate suppression.
 type OnceGroup[K comparable, V any] struct {
-	m pb.MapOf[K, *call[V]]
+	m Map[K, *call[V]]
 }
 
 // Do execute and returns the results of the given function, making
@@ -44,9 +42,9 @@ func (g *OnceGroup[K, V]) Do(
 	fn func() (V, error),
 ) (V, error, bool) {
 	var c *call[V]
-	_, loaded := g.m.ProcessEntry(
+	_, loaded := g.m.ComputeEntry(
 		key,
-		func(l *pb.EntryOf[K, *call[V]]) (*pb.EntryOf[K, *call[V]], *call[V], bool) {
+		func(l *Entry[K, *call[V]]) (*Entry[K, *call[V]], *call[V], bool) {
 			if l != nil {
 				c = l.Value
 				atomic.AddInt32(&c.dups, 1)
@@ -54,7 +52,7 @@ func (g *OnceGroup[K, V]) Do(
 			}
 			c = &call[V]{}
 			c.wg.Add(1)
-			return &pb.EntryOf[K, *call[V]]{Value: c}, c, false
+			return &Entry[K, *call[V]]{Value: c}, c, false
 		},
 	)
 	if loaded {
@@ -84,9 +82,9 @@ func (g *OnceGroup[K, V]) DoChan(
 ) <-chan Result[V] {
 	ch := make(chan Result[V], 1)
 	var c *call[V]
-	_, loaded := g.m.ProcessEntry(
+	_, loaded := g.m.ComputeEntry(
 		key,
-		func(l *pb.EntryOf[K, *call[V]]) (*pb.EntryOf[K, *call[V]], *call[V], bool) {
+		func(l *Entry[K, *call[V]]) (*Entry[K, *call[V]], *call[V], bool) {
 			if l != nil {
 				c = l.Value
 				atomic.AddInt32(&c.dups, 1)
@@ -100,7 +98,7 @@ func (g *OnceGroup[K, V]) DoChan(
 				),
 			}
 			c.wg.Add(1)
-			return &pb.EntryOf[K, *call[V]]{Value: c}, c, false
+			return &Entry[K, *call[V]]{Value: c}, c, false
 		},
 	)
 	if loaded {
@@ -119,9 +117,9 @@ func (g *OnceGroup[K, V]) Forget(key K) {
 
 // ForgetUnshared deletes the key only if no duplicates joined.
 func (g *OnceGroup[K, V]) ForgetUnshared(key K) bool {
-	_, ok := g.m.ProcessEntry(
+	_, ok := g.m.ComputeEntry(
 		key,
-		func(l *pb.EntryOf[K, *call[V]]) (*pb.EntryOf[K, *call[V]], *call[V], bool) {
+		func(l *Entry[K, *call[V]]) (*Entry[K, *call[V]], *call[V], bool) {
 			if l != nil && atomic.LoadInt32(&l.Value.dups) == 0 {
 				return nil, nil, true
 			}
@@ -151,9 +149,9 @@ func (g *OnceGroup[K, V]) doCall(
 		c.wg.Done()
 
 		var chs []chan<- Result[V]
-		_, _ = g.m.ProcessEntry(
+		_, _ = g.m.ComputeEntry(
 			key,
-			func(l *pb.EntryOf[K, *call[V]]) (*pb.EntryOf[K, *call[V]], *call[V], bool) {
+			func(l *Entry[K, *call[V]]) (*Entry[K, *call[V]], *call[V], bool) {
 				if l != nil && l.Value == c {
 					chs = append(chs, l.Value.chans...)
 					return nil, nil, false
@@ -167,7 +165,8 @@ func (g *OnceGroup[K, V]) doCall(
 
 		// After wg.Done, duplicates in Do() will wake and re-panic/goexit.
 		var e *panicError
-		if errors.As(c.err, &e) {
+		switch {
+		case errors.As(c.err, &e):
 			// Match x/sync: ensure panic is unrecoverable and visible.
 			if len(chs) > 0 {
 				//goland:noinspection All
@@ -176,9 +175,9 @@ func (g *OnceGroup[K, V]) doCall(
 			} else {
 				panic(e)
 			}
-		} else if errors.Is(c.err, errGoexit) {
+		case errors.Is(c.err, errGoexit):
 			// Primary goroutine already Goexit'ed; nothing to do here.
-		} else {
+		default:
 			// Normal return: notify DoChan waiters.
 			shared := atomic.LoadInt32(&c.dups) > 0
 			for _, ch := range chs {
@@ -237,7 +236,7 @@ func (p *panicError) Unwrap() error {
 func newPanicError(v any) error {
 	stack := debug.Stack()
 	// Trim first line "goroutine N [status]:" which can be misleading.
-	if line := bytes.IndexByte(stack[:], '\n'); line >= 0 {
+	if line := bytes.IndexByte(stack, '\n'); line >= 0 {
 		stack = stack[line+1:]
 	}
 	return &panicError{value: v, stack: stack}

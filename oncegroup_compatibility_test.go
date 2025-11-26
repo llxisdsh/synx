@@ -47,6 +47,7 @@ func TestPanicErrorUnwrap(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		//nolint:modernize
 		tc := tc
 
 		t.Run(tc.name, func(t *testing.T) {
@@ -228,7 +229,7 @@ func TestPanicDo(t *testing.T) {
 	waited := int32(n)
 	panicCount := int32(0)
 	done := make(chan struct{})
-	for i := 0; i < n; i++ {
+	for range n {
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
