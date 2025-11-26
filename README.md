@@ -16,10 +16,10 @@ go get github.com/llxisdsh/synx
 
 State-of-the-art concurrent map implementations, streamlined from [**llxisdsh/pb**](https://github.com/llxisdsh/pb).
 
-| Component | Description | Ideal Use Case |
-|-----------|-------------|----------------|
-| **`Map[K, V]`** | **Lock-free reads**, fine-grained write locking. Drop-in `sync.Map` replacement. | General purpose, mixed R/W workloads. |
-| **`FlatMap[K, V]`** | **Seqlock-based**, open-addressing with inline storage. | Read-heavy, cache-sensitive scenarios. |
+| Component           | Description                                                                      | Ideal Use Case                         |
+|---------------------|----------------------------------------------------------------------------------|----------------------------------------|
+| **`Map[K, V]`**     | **Lock-free reads**, fine-grained write locking. Drop-in `sync.Map` replacement. | General purpose, mixed R/W workloads.  |
+| **`FlatMap[K, V]`** | **Seqlock-based**, open-addressing with inline storage.                          | Read-heavy, cache-sensitive scenarios. |
 
 > **Note**: These components retain the core high-performance logic of `llxisdsh/pb` but are packaged here for lightweight integration. For comprehensive benchmarks and advanced architectural details, please refer to the [upstream repository](https://github.com/llxisdsh/pb).
 
