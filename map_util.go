@@ -5,11 +5,16 @@ import (
 	"reflect"
 	"time"
 	"unsafe"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // ============================================================================
 // Private Constants
 // ============================================================================
+
+// cacheLineSize is the size of a cache line in bytes.
+const cacheLineSize = opt.CacheLineSize_
 
 const (
 	// opByteIdx reserves the highest byte of meta for extended status flags
@@ -34,7 +39,7 @@ const (
 	//   - 32-bit: bucket size becomes 32B → 2/4/8 buckets per
 	//     64/128/256B cache line, also without padding.
 	//
-	// Example outcomes (ptrSize, CacheLineSize → entries):
+	// Example outcomes (ptrSize, cacheLineSize → entries):
 	//   (8,  32) → 2  ; (8,  64) → 6 ; (8, 128) → 6 ; (8, 256) → 6
 	//   (4,  32) → 5  ; (4,  64) → 5 ; (4, 128) → 5 ; (4, 256) → 5
 	pointerSize    = int(unsafe.Sizeof(unsafe.Pointer(nil)))
@@ -42,7 +47,7 @@ const (
 		meta uint64
 		next unsafe.Pointer
 	}{}))
-	maxBucketBytes   = min(int(CacheLineSize), 32+32*(pointerSize/8))
+	maxBucketBytes   = min(int(cacheLineSize), 32+32*(pointerSize/8))
 	entriesPerBucket = min(opByteIdx, (maxBucketBytes-bucketOverhead)/pointerSize)
 
 	// Metadata constants for bucket entry management
@@ -87,6 +92,14 @@ const (
 	mapShrinkHint
 	mapRebuildAllowWritersHint
 	mapRebuildBlockWritersHint
+)
+
+type computeOp uint8
+
+const (
+	cancelOp computeOp = iota
+	updateOp
+	deleteOp
 )
 
 // ============================================================================

@@ -4,43 +4,17 @@ import (
 	"fmt"
 	"strings"
 	"unsafe"
-
-	. "github.com/llxisdsh/synx/internal/opt" // nolint:staticcheck
-)
-
-// ============================================================================
-// Public Constants
-// ============================================================================
-
-// CacheLineSize is the size of a cache line in bytes.
-const CacheLineSize = CacheLineSize_
-
-// ComputeOp is the operation to perform on the map entry.
-type ComputeOp uint8
-
-const (
-	// Cancel signals to Compute to not do anything as a result
-	// of executing the lambda. If the entry was not present in
-	// the map, nothing happens, and if it was present, the
-	// returned value is ignored.
-	Cancel ComputeOp = iota
-	// Update signals to Compute to update the entry to the
-	// value returned by the lambda, creating it if necessary.
-	Update
-	// Delete signals to Compute to always delete the entry
-	// from the map.
-	Delete
 )
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-// Config defines configurable options for Map initialization.
+// MapConfig defines configurable options for Map initialization.
 // This structure contains all the configuration parameters that can be used
 // to customize the behavior and performance characteristics of a Map
 // instance.
-type Config struct {
+type MapConfig struct {
 	// KeyHash specifies a custom hash function for keys.
 	// If nil, the built-in hash function will be used.
 	// Custom hash functions can improve performance for specific key types
@@ -81,8 +55,8 @@ type Config struct {
 // capacity, meaning that the underlying hash table will never shrink
 // to a smaller capacity. If sizeHint is zero or negative, the value
 // is ignored.
-func WithCapacity(sizeHint int) func(*Config) {
-	return func(c *Config) {
+func WithCapacity(sizeHint int) func(*MapConfig) {
+	return func(c *MapConfig) {
 		c.SizeHint = sizeHint
 	}
 }
@@ -90,8 +64,8 @@ func WithCapacity(sizeHint int) func(*Config) {
 // WithAutoShrink configures automatic map shrinking when the load factor
 // falls below the threshold (default: 1/shrinkFraction).
 // Disabled by default to prioritize performance.
-func WithAutoShrink() func(*Config) {
-	return func(c *Config) {
+func WithAutoShrink() func(*MapConfig) {
+	return func(c *MapConfig) {
 		c.AutoShrink = true
 	}
 }
@@ -157,8 +131,8 @@ const (
 func WithKeyHasher[K comparable](
 	keyHash func(key K, seed uintptr) uintptr,
 	opt ...HashOptimization,
-) func(*Config) {
-	return func(c *Config) {
+) func(*MapConfig) {
+	return func(c *MapConfig) {
 		if keyHash != nil {
 			c.KeyHash = func(pointer unsafe.Pointer, u uintptr) uintptr {
 				return keyHash(*(*K)(pointer), u)
@@ -206,8 +180,8 @@ func WithKeyHasher[K comparable](
 func WithKeyHasherUnsafe(
 	hs HashFunc,
 	opt ...HashOptimization,
-) func(*Config) {
-	return func(c *Config) {
+) func(*MapConfig) {
+	return func(c *MapConfig) {
 		c.KeyHash = hs
 		if len(opt) != 0 {
 			c.HashOpt = opt[0]
@@ -239,8 +213,8 @@ func WithKeyHasherUnsafe(
 //   - Required for non-comparable types (slices, maps, functions)
 func WithValueEqual[V any](
 	valEqual func(val, val2 V) bool,
-) func(*Config) {
-	return func(c *Config) {
+) func(*MapConfig) {
+	return func(c *MapConfig) {
 		if valEqual != nil {
 			c.ValEqual = func(val unsafe.Pointer, val2 unsafe.Pointer) bool {
 				return valEqual(*(*V)(val), *(*V)(val2))
@@ -274,13 +248,13 @@ func WithValueEqual[V any](
 //   - Both pointers must point to valid memory of the same type
 //   - Incorrect pointer operations will cause crashes or memory corruption
 //   - Only use if you understand Go's unsafe package
-func WithValueEqualUnsafe(eq EqualFunc) func(*Config) {
-	return func(c *Config) {
+func WithValueEqualUnsafe(eq EqualFunc) func(*MapConfig) {
+	return func(c *MapConfig) {
 		c.ValEqual = eq
 	}
 }
 
-// WithBuiltInHasher returns a Config option that explicitly sets the
+// WithBuiltInHasher returns a MapConfig option that explicitly sets the
 // built-in hash function for the specified type.
 //
 // This option is useful when you want to explicitly use Go's built-in hasher
@@ -296,8 +270,8 @@ func WithValueEqualUnsafe(eq EqualFunc) func(*Config) {
 // Usage:
 //
 //	m := NewMap[string, int](WithBuiltInHasher[string]())
-func WithBuiltInHasher[T comparable]() func(*Config) {
-	return func(c *Config) {
+func WithBuiltInHasher[T comparable]() func(*MapConfig) {
+	return func(c *MapConfig) {
 		c.KeyHash = GetBuiltInHasher[T]()
 	}
 }
@@ -392,7 +366,7 @@ func parseValueInterface[V any]() (valEqual EqualFunc) {
 	return
 }
 
-func (cfg *Config) parseIntKey(intKey *bool) {
+func (cfg *MapConfig) parseIntKey(intKey *bool) {
 	switch cfg.HashOpt {
 	case LinearDistribution:
 		*intKey = true
@@ -449,10 +423,6 @@ type MapStats struct {
 	TotalShrinks uint32
 }
 
-// ============================================================================
-// Hash Utilities
-// ============================================================================
-
 // String returns string representation of map stats.
 func (s *MapStats) String() string {
 	var sb strings.Builder
@@ -471,6 +441,10 @@ func (s *MapStats) String() string {
 	sb.WriteString("}\n")
 	return sb.String()
 }
+
+// ============================================================================
+// Hash Utilities
+// ============================================================================
 
 // GetBuiltInHasher returns Go's built-in hash function for the specified type.
 // This function provides direct access to the same hash function that Go's

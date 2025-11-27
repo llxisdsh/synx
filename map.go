@@ -93,7 +93,7 @@ type bucket struct {
 // Parameters:
 //   - options: configuration options (WithCapacity, WithKeyHasher, etc.)
 func NewMap[K comparable, V any](
-	options ...func(*Config),
+	options ...func(*MapConfig),
 ) *Map[K, V] {
 	m := &Map[K, V]{}
 	m.InitWithOptions(options...)
@@ -123,9 +123,9 @@ func NewMap[K comparable, V any](
 //   - If this function is not called, Map will use default configuration
 //   - The behavior of calling this function multiple times is undefined
 func (m *Map[K, V]) InitWithOptions(
-	options ...func(*Config),
+	options ...func(*MapConfig),
 ) {
-	cfg := &Config{}
+	cfg := &MapConfig{}
 
 	// parse options
 	for _, o := range options {
@@ -495,15 +495,10 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 //
 // Callback signature:
 //
-//	fn(old V, loaded bool) (newV V, op ComputeOp, ret V, status bool)
+//		fn(e *MapIter[K, V])
 //
-//	- old/loaded: the existing value and whether it was found.
-//	- newV/op: the operation to apply to the map:
-//	  • UpdateOp: update the existing value; if not found, insert newV.
-//	  • DeleteOp: delete the entry only if it exists.
-//	  • CancelOp: do not modify the map.
-//	- ret/status: values returned to the caller of Compute, allowing the
-//	  callback to provide computed results (e.g., final value and hit status).
+//	  - Use e.Loaded() and e.Value() to inspect the current state
+//	  - Use e.Update(newV) to upsert; Use e.Delete() to remove
 //
 // Parameters:
 //
@@ -511,37 +506,35 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 //   - fn: Callback function (called regardless of value existence)
 //
 // Returns:
-//   - (ret, status) as provided by the callback; typical conventions are
-//     ret=final value and status=hit/success.
-//
-// Typical use cases:
-//   - Upsert: overwrite if present, insert otherwise.
-//   - CAS-like logic: decide Update/CancelOp based on old.
-//   - Conditional delete: choose Delete or Cancel by business rule.
+//   - actual: The value as returned by the callback.
+//   - loaded: True if the key existed before the callback, false otherwise.
 func (m *Map[K, V]) Compute(
 	key K,
-	fn func(old V, loaded bool) (newV V, op ComputeOp, ret V, status bool),
-) (V, bool) {
+	fn func(e *MapIter[K, V]),
+) (actual V, loaded bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
 		table = m.slowInit()
 	}
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
-	return m.computeEntry(table, hash, &key, func(e *Entry[K, V]) (*Entry[K, V], V, bool) {
-		var v V
-		if e != nil {
-			v = e.Value
-		}
-		newV, op, ret, status := fn(v, e != nil)
-		switch op {
-		case Delete:
-			return nil, ret, status
-		case Update:
-			return &Entry[K, V]{Value: newV}, ret, status
-		default:
-			return e, ret, status
-		}
-	})
+	return m.computeEntry(table, hash, &key,
+		func(e *Entry[K, V]) (*Entry[K, V], V, bool) {
+			var it MapIter[K, V]
+			if e != nil {
+				it.entry = *e
+				it.loaded = true
+			}
+			fn(&it)
+			switch it.op {
+			case updateOp:
+				return &Entry[K, V]{Value: it.Value()}, it.Value(), it.loaded
+			case deleteOp:
+				return nil, it.Value(), it.loaded
+			default:
+				return e, it.Value(), it.loaded
+			}
+		},
+	)
 }
 
 // ComputeEntry processes a key-value pair using the provided function.
@@ -785,48 +778,60 @@ func (m *Map[K, V]) RangeEntries(yield func(e *Entry[K, V]) bool) {
 	}
 }
 
-// ComputeRange iterates over all key-value pairs and applies a user function.
+// ComputeAll returns an iterator function for use with range-over-func.
+// It provides the same functionality as ComputeRange but in iterator form.
 //
-// For each entry, calls:
+//go:nosplit
+func (m *Map[K, V]) ComputeAll(
+	blockWriters ...bool,
+) func(yield func(e *MapIter[K, V]) bool) {
+	return func(yield func(e *MapIter[K, V]) bool) {
+		m.ComputeRange(yield, blockWriters...)
+	}
+}
+
+// ComputeRange iterates all entries and applies a user callback.
 //
-//	fn(key K, value V) (newV V, op ComputeOp)
+// Callback signature:
 //
-//	op:
-//	 - UpdateOp: update the entry value to newV (protected by bucket seqlock)
-//	 - DeleteOp: remove the entry (update meta, clear entry, adjust size)
-//	 - CancelOp: no change
+//		fn(e *MapIter[K, V]) bool
+//
+//	  - e.Update(newV): update the entry to newV
+//	  - e.Delete(): delete the entry
+//	  - default (no op): keep the entry unchanged
+//	  - return true to continue; return false to stop iteration immediately
+//	    (the entry passed to the final callback is not modified when stopping)
 //
 // Concurrency & consistency:
-//   - If a resize/rebuild is detected, it cooperates to completion, then
-//     iterates the new table while blocking subsequent resize/rebuild.
+//   - Cooperates with concurrent grow/shrink; if a resize is detected, it
+//     helps complete copying, then continues on the latest table.
 //   - Holds the root-bucket lock while processing its bucket chain to
-//     coordinate with concurrent writers/resize operations.
-//   - Uses per-bucket seqlock to minimize the odd (write) window and preserve
-//     read consistency.
+//     coordinate with writers/resize operations.
+//   - Uses per-bucket seqlock discipline internally to minimize write windows
+//     and preserve reader consistency.
 //
 // Parameters:
 //   - fn: user function applied to each key-value pair.
-//   - blockWriters: optional flag (default false).
-//     If true, concurrent writers are blocked; otherwise they are allowed.
-//     Resize operations (grow/shrink) are always exclusive.
+//   - blockWriters: optional flag (default false). If true, concurrent writers
+//     are blocked during iteration; resize operations are always exclusive.
 //
 // Recommendation: keep fn lightweight to reduce lock hold time.
 func (m *Map[K, V]) ComputeRange(
-	fn func(key K, value V) (newV V, op ComputeOp, ok bool),
+	fn func(e *MapIter[K, V]) bool,
 	blockWriters ...bool,
 ) {
+	it := MapIter[K, V]{loaded: true}
 	m.ComputeRangeEntries(func(e *Entry[K, V]) (*Entry[K, V], bool) {
-		newV, op, ok := fn(e.Key, e.Value)
-		if !ok {
-			return e, ok
-		}
-		switch op {
-		case Delete:
-			return nil, ok
-		case Update:
-			return &Entry[K, V]{Value: newV}, ok
+		it.entry = *e
+		it.op = cancelOp
+		cont := fn(&it)
+		switch it.op {
+		case updateOp:
+			return &Entry[K, V]{Value: it.entry.Value}, cont
+		case deleteOp:
+			return nil, cont
 		default:
-			return e, ok
+			return e, cont
 		}
 	}, blockWriters...)
 }
@@ -881,14 +886,9 @@ func (m *Map[K, V]) ComputeRangeEntries(
 					j := firstMarkedByteIndex(marked)
 					if e := (*Entry[K, V])(*b.At(j)); e != nil {
 						newEntry, shouldContinue := fn(e)
-						if !shouldContinue {
-							root.Unlock()
-							return
-						}
 
 						if newEntry != nil {
 							if newEntry != e {
-								// Update
 								if EmbeddedHash {
 									newEntry.SetHash(e.GetHash())
 								}
@@ -896,12 +896,15 @@ func (m *Map[K, V]) ComputeRangeEntries(
 								StorePtr(b.At(j), unsafe.Pointer(newEntry))
 							}
 						} else {
-							// Delete
 							StorePtr(b.At(j), nil)
-							// Keep snapshot fresh to prevent stale meta
 							meta = setByte(meta, emptySlot, j)
 							StoreInt(&b.meta, meta)
 							table.AddSize(i, -1)
+						}
+
+						if !shouldContinue {
+							root.Unlock()
+							return
 						}
 					}
 				}
@@ -912,7 +915,7 @@ func (m *Map[K, V]) ComputeRangeEntries(
 }
 
 func (m *Map[K, V]) init(
-	cfg *Config,
+	cfg *MapConfig,
 ) *mapTable {
 	// parse interface
 	if cfg.KeyHash == nil {
@@ -972,7 +975,7 @@ func (m *Map[K, V]) slowInit() *mapTable {
 	}
 
 	// Perform initialization
-	cfg := &Config{}
+	cfg := &MapConfig{}
 	table = m.init(cfg)
 	m.endRebuild(rs)
 	return table
@@ -1590,4 +1593,52 @@ func (m *Map[K, V]) Stats() *MapStats {
 		}
 	}
 	return stats
+}
+
+// MapIter represents an entry being processed in Compute/ComputeRange operations.
+// It provides methods to update or delete the entry during iteration.
+type MapIter[K comparable, V any] struct {
+	entry  Entry[K, V]
+	loaded bool
+	op     computeOp
+}
+
+// Key returns the key of the current entry.
+//
+//go:nosplit
+func (e *MapIter[K, V]) Key() K {
+	return e.entry.Key
+}
+
+// Value returns the value of the current entry.
+//
+//go:nosplit
+func (e *MapIter[K, V]) Value() V {
+	return e.entry.Value
+}
+
+// Loaded returns true if the entry is loaded, false otherwise.
+//
+//go:nosplit
+func (e *MapIter[K, V]) Loaded() bool {
+	return e.loaded
+}
+
+// Update performs an upsert on the current entry.
+// If Loaded()==true, replaces the value;
+// if false, inserts the key with newValue.
+//
+//go:nosplit
+func (e *MapIter[K, V]) Update(newValue V) {
+	e.entry.Value = newValue
+	e.op = updateOp
+}
+
+// Delete marks the current entry for deletion.
+// The entry will be removed from the map.
+//
+//go:nosplit
+func (e *MapIter[K, V]) Delete() {
+	e.entry.Value = *new(V)
+	e.op = deleteOp
 }

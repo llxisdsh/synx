@@ -49,7 +49,7 @@ func TestEntriesPerBucket_Simulated(t *testing.T) {
 
 func TestEntriesPerBucket_Actual(t *testing.T) {
 	ps := int(unsafe.Sizeof(unsafe.Pointer(nil)))
-	cl := int(CacheLineSize)
+	cl := int(cacheLineSize)
 	exp := calcEntriesSim(ps, cl)
 	if entriesPerBucket != exp {
 		t.Fatalf("entriesPerBucket=%d exp=%d", entriesPerBucket, exp)

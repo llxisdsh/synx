@@ -59,7 +59,7 @@ type structKey struct {
 }
 
 func TestMap_BucketOfStructSize(t *testing.T) {
-	t.Logf("CacheLineSize : %d", CacheLineSize)
+	t.Logf("CacheLineSize : %d", cacheLineSize)
 	t.Logf("entriesPerBucket : %d", entriesPerBucket)
 
 	size := unsafe.Sizeof(CounterStripe{})
@@ -67,25 +67,25 @@ func TestMap_BucketOfStructSize(t *testing.T) {
 
 	size = unsafe.Sizeof(bucket{})
 	t.Log("bucket size:", size)
-	if size != CacheLineSize {
+	if cacheLineSize%size != 0 {
 		t.Logf("bucket doesn't meet CacheLineSize: %d", size)
 	}
 
 	size = unsafe.Sizeof(mapTable{})
 	t.Log("mapTable size:", size)
-	if size != CacheLineSize {
+	if size != cacheLineSize {
 		t.Logf("mapTable doesn't meet CacheLineSize: %d", size)
 	}
 
 	size = unsafe.Sizeof(rebuildState{})
 	t.Log("rebuildState size:", size)
-	if size != CacheLineSize {
+	if size != cacheLineSize {
 		t.Logf("rebuildState doesn't meet CacheLineSize: %d", size)
 	}
 
 	size = unsafe.Sizeof(Map[string, int]{})
 	t.Log("Map size:", size)
-	if size != CacheLineSize {
+	if size != cacheLineSize {
 		t.Logf("Map doesn't meet CacheLineSize: %d", size)
 	}
 
@@ -145,44 +145,43 @@ func TestMap_InterfaceKey(t *testing.T) {
 func TestMap_Compute_Basic(t *testing.T) {
 	m := NewMap[string, int]()
 
-	ret, ok := m.Compute("k1", func(old int, loaded bool) (int, ComputeOp, int, bool) {
-		return 5, Update, 5, true
+	ret, loaded := m.Compute("k1", func(e *MapIter[string, int]) {
+		e.Update(5)
 	})
-	if !ok || ret != 5 {
-		t.Fatalf("Compute insert ret=%d ok=%v", ret, ok)
+	if loaded || ret != 5 {
+		t.Fatalf("Compute insert ret=%d ok=%v", ret, loaded)
 	}
-	if v, loaded := m.Load("k1"); !loaded || v != 5 {
-		t.Fatalf("Load after Compute insert v=%d ok=%v", v, loaded)
+	if ret, loaded = m.Load("k1"); !loaded || ret != 5 {
+		t.Fatalf("Load after Compute insert v=%d ok=%v", ret, loaded)
 	}
 
 	m.Store("k2", 1)
-	ret, ok = m.Compute("k2", func(old int, loaded bool) (int, ComputeOp, int, bool) {
-		return old + 1, Update, old + 1, true
+	ret, loaded = m.Compute("k2", func(e *MapIter[string, int]) {
+		e.Update(e.Value() + 1)
 	})
-	if !ok || ret != 2 {
-		t.Fatalf("Compute update ret=%d ok=%v", ret, ok)
+	if !loaded || ret != 2 {
+		t.Fatalf("Compute update ret=%d ok=%v", ret, loaded)
 	}
-	if v, loaded := m.Load("k2"); !loaded || v != 2 {
-		t.Fatalf("Load after Compute update v=%d ok=%v", v, loaded)
+	if ret, loaded = m.Load("k2"); !loaded || ret != 2 {
+		t.Fatalf("Load after Compute update v=%d ok=%v", ret, loaded)
 	}
 
 	m.Store("k3", 10)
-	ret, ok = m.Compute("k3", func(old int, loaded bool) (int, ComputeOp, int, bool) {
-		return old, Delete, old, true
+	ret, loaded = m.Compute("k3", func(e *MapIter[string, int]) {
+		e.Delete()
 	})
-	if !ok || ret != 10 {
-		t.Fatalf("Compute delete ret=%d ok=%v", ret, ok)
+	if !loaded || ret != 0 {
+		t.Fatalf("Compute delete ret=%d ok=%v", ret, loaded)
 	}
-	if _, loaded := m.Load("k3"); loaded {
+	if _, loaded = m.Load("k3"); loaded {
 		t.Fatalf("Load after Compute delete should be missing")
 	}
 
 	m.Store("k4", 7)
-	ret, ok = m.Compute("k4", func(old int, loaded bool) (int, ComputeOp, int, bool) {
-		return old, Cancel, old, true
+	ret, loaded = m.Compute("k4", func(e *MapIter[string, int]) {
 	})
-	if !ok || ret != 7 {
-		t.Fatalf("Compute cancel ret=%d ok=%v", ret, ok)
+	if !loaded || ret != 7 {
+		t.Fatalf("Compute cancel ret=%d ok=%v", ret, loaded)
 	}
 	if v, loaded := m.Load("k4"); !loaded || v != 7 {
 		t.Fatalf("Load after Compute cancel v=%d ok=%v", v, loaded)
@@ -212,14 +211,16 @@ func TestMap_ComputeRange_UpdateDeleteCancel(t *testing.T) {
 	m.Store("b", 2)
 	m.Store("c", 3)
 
-	m.ComputeRange(func(k string, v int) (int, ComputeOp, bool) {
-		if k == "c" {
-			return 0, Delete, true
+	m.ComputeRange(func(e *MapIter[string, int]) bool {
+		if e.Key() == "c" {
+			e.Delete()
+			return true
 		}
-		if k == "b" {
-			return 0, Cancel, true
+		if e.Key() == "b" {
+			return true
 		}
-		return v * 2, Update, true
+		e.Update(e.Value() * 2)
+		return true
 	})
 
 	if v, ok := m.Load("a"); !ok || v != 2 {
@@ -1366,7 +1367,7 @@ func TestMapWithBuiltInHasher(t *testing.T) {
 			"a",                                   // single char
 			"hello",                               // short string
 			"this is a longer string for testing", // long string
-			"unicode: 你好世界",                       // unicode string
+			"unicode: 你好世界",                   // unicode string
 		}
 
 		// Store test data
@@ -1667,7 +1668,7 @@ func TestMap_Interfaces(t *testing.T) {
 		val2 := SmartValue{
 			Value:   100,
 			Ignored: "ignore2",
-		} // same Value, different Ignored
+		}                                                  // same Value, different Ignored
 		val3 := SmartValue{Value: 200, Ignored: "ignore1"} // different Value
 
 		m.Store(key, val1)
@@ -5882,7 +5883,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 func TestMap_init(t *testing.T) {
 	t.Run("BasicConfig", func(t *testing.T) {
 		var m Map[string, int]
-		config := &Config{
+		config := &MapConfig{
 			SizeHint:   100,
 			AutoShrink: false,
 		}
@@ -5911,7 +5912,7 @@ func TestMap_init(t *testing.T) {
 			return val1 == val2
 		}
 
-		config := &Config{
+		config := &MapConfig{
 			KeyHash:    customHash,
 			ValEqual:   customEqual,
 			SizeHint:   200,
@@ -5938,7 +5939,7 @@ func TestMap_init(t *testing.T) {
 
 	t.Run("ConfigReuse", func(t *testing.T) {
 		// Test that the same config can be used for multiple maps
-		config := &Config{
+		config := &MapConfig{
 			SizeHint:   50,
 			AutoShrink: true,
 		}
@@ -5971,7 +5972,7 @@ func TestMap_init(t *testing.T) {
 
 	t.Run("EmptyConfig", func(t *testing.T) {
 		var m Map[string, int]
-		config := &Config{} // Empty config, should use defaults
+		config := &MapConfig{} // Empty config, should use defaults
 
 		m.init(config)
 
@@ -5990,7 +5991,7 @@ func TestMap_init(t *testing.T) {
 			return uintptr(len(key)) * 31 // Simple hash
 		}
 
-		config := &Config{
+		config := &MapConfig{
 			KeyHash: customHash,
 			// ValEqual is nil, should use default
 			SizeHint: 100,
@@ -6014,7 +6015,7 @@ func TestMap_init(t *testing.T) {
 			return val1 == val2
 		}
 
-		config := &Config{
+		config := &MapConfig{
 			// KeyHash is nil, should use default
 			ValEqual: customEqual,
 			SizeHint: 100,
@@ -6083,7 +6084,7 @@ func TestMap_UnlockWithMeta(t *testing.T) {
 	})
 }
 
-func TestMap_EmbeddedHashOff(t *testing.T) {
+func TestMap_EmbeddedHash(t *testing.T) {
 	// These functions are no-ops when synx_embedded_hash build tag is not set
 	// But we still need to call them to get coverage
 
