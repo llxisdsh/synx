@@ -799,7 +799,7 @@ func TestMapCalcLen(t *testing.T) {
 	for i := range 1000000 {
 		tableLen = calcTableLen(i)
 		sizeLen = calcSizeLen(i, cpus)
-		// const sizeHintFactor = float64(entriesPerBucket) * mapLoadFactor
+		// const capFactor = float64(entriesPerBucket) * mapLoadFactor
 		growThreshold := int(
 			float64(tableLen*entriesPerBucket) * loadFactor,
 		)
@@ -810,7 +810,7 @@ func TestMapCalcLen(t *testing.T) {
 			sizeLen != lastSizeLen ||
 			parallelism != lastParallelism {
 			t.Logf(
-				"sizeHint: %v, tableLen: %v, growThreshold: %v, growTableLen: %v, counterLen: %v, parallelism: %v",
+				"capacity: %v, tableLen: %v, growThreshold: %v, growTableLen: %v, counterLen: %v, parallelism: %v",
 				i,
 				tableLen,
 				growThreshold,
@@ -892,7 +892,7 @@ func TestMapWithKeyHasherUnsafe(t *testing.T) {
 			return uintptr(val*31) ^ seed
 		}
 
-		m := NewMap[int, string](WithKeyHasherUnsafe(unsafeIntHasher, LinearDistribution))
+		m := NewMap[int, string](WithKeyHasherUnsafe(unsafeIntHasher, true))
 
 		// Test with sequential keys (good for linear distribution)
 		for i := range 100 {
@@ -919,7 +919,7 @@ func TestMapWithKeyHasherUnsafe(t *testing.T) {
 			return hash
 		}
 
-		m := NewMap[string, int](WithKeyHasherUnsafe(unsafeStringHasher, ShiftDistribution))
+		m := NewMap[string, int](WithKeyHasherUnsafe(unsafeStringHasher))
 
 		// Test with random-like string keys
 		keys := []string{"apple", "banana", "cherry", "date", "elderberry"}
@@ -1367,7 +1367,7 @@ func TestMapWithBuiltInHasher(t *testing.T) {
 			"a",                                   // single char
 			"hello",                               // short string
 			"this is a longer string for testing", // long string
-			"unicode: 你好世界",                   // unicode string
+			"unicode: 你好世界",                       // unicode string
 		}
 
 		// Store test data
@@ -1496,19 +1496,19 @@ type CustomKey struct {
 	Name string
 }
 
-func (c CustomKey) HashCode(seed uintptr) uintptr {
+func (c CustomKey) HashFunc(seed uintptr) uintptr {
 	// Simple hash combining ID and name length
 	return uintptr(c.ID)*31 + uintptr(len(c.Name)) + seed
 }
 
 type SequentialKey int64
 
-func (s SequentialKey) HashCode(seed uintptr) uintptr {
+func (s SequentialKey) HashFunc(seed uintptr) uintptr {
 	return uintptr(s) + seed
 }
 
-func (s SequentialKey) HashOpts() []HashOptimization {
-	return []HashOptimization{LinearDistribution}
+func (s SequentialKey) IntKey() bool {
+	return true
 }
 
 type CustomValue struct {
@@ -1516,7 +1516,7 @@ type CustomValue struct {
 	Meta string
 }
 
-func (c CustomValue) Equal(other CustomValue) bool {
+func (c CustomValue) EqualFunc(other CustomValue) bool {
 	// Custom equality: only compare Data slice, ignore Meta
 	if len(c.Data) != len(other.Data) {
 		return false
@@ -1533,12 +1533,12 @@ type SmartKey struct {
 	ID int64
 }
 
-func (s SmartKey) HashCode(seed uintptr) uintptr {
+func (s SmartKey) HashFunc(seed uintptr) uintptr {
 	return uintptr(s.ID) + seed
 }
 
-func (s SmartKey) HashOpts() []HashOptimization {
-	return []HashOptimization{LinearDistribution}
+func (s SmartKey) IntKey() bool {
+	return true
 }
 
 type SmartValue struct {
@@ -1546,13 +1546,13 @@ type SmartValue struct {
 	Ignored string
 }
 
-func (s SmartValue) Equal(other SmartValue) bool {
+func (s SmartValue) EqualFunc(other SmartValue) bool {
 	return s.Value == other.Value // ignore Ignored field
 }
 
 type HashKey int
 
-func (h HashKey) HashCode(seed uintptr) uintptr {
+func (h HashKey) HashFunc(seed uintptr) uintptr {
 	return uintptr(h) + seed
 }
 
@@ -1560,13 +1560,13 @@ type EqualValue struct {
 	Value int
 }
 
-func (e EqualValue) Equal(other EqualValue) bool {
+func (e EqualValue) EqualFunc(other EqualValue) bool {
 	return e.Value == other.Value
 }
 
-// TestMap_Interfaces tests the IHashCode, IHashOpts, and IEqual interfaces
+// TestMap_Interfaces tests the IHashFunc, IIntKey, and IEqualFunc interfaces
 func TestMap_Interfaces(t *testing.T) {
-	t.Run("IHashCode", func(t *testing.T) {
+	t.Run("IHashFunc", func(t *testing.T) {
 		m := NewMap[CustomKey, string]()
 		key1 := CustomKey{ID: 1, Name: "test"}
 		key2 := CustomKey{ID: 2, Name: "hello"}
@@ -1592,7 +1592,7 @@ func TestMap_Interfaces(t *testing.T) {
 		}
 	})
 
-	t.Run("IHashOpts", func(t *testing.T) {
+	t.Run("IIntKey", func(t *testing.T) {
 		m := NewMap[SequentialKey, string]()
 
 		// Store sequential keys
@@ -1614,7 +1614,7 @@ func TestMap_Interfaces(t *testing.T) {
 		}
 	})
 
-	t.Run("IEqual", func(t *testing.T) {
+	t.Run("IEqualFunc", func(t *testing.T) {
 		m := NewMap[string, CustomValue]()
 
 		val1 := CustomValue{Data: []int{1, 2, 3}, Meta: "meta1"}
@@ -1639,7 +1639,7 @@ func TestMap_Interfaces(t *testing.T) {
 		// Verify the value was swapped
 		if actual, ok := m.Load("key1"); !ok {
 			t.Error("Key should exist after CompareAndSwap")
-		} else if !actual.Equal(val3) {
+		} else if !actual.EqualFunc(val3) {
 			t.Errorf("Expected value to be swapped to val3, got %+v", actual)
 		}
 
@@ -1668,13 +1668,13 @@ func TestMap_Interfaces(t *testing.T) {
 		val2 := SmartValue{
 			Value:   100,
 			Ignored: "ignore2",
-		}                                                  // same Value, different Ignored
+		} // same Value, different Ignored
 		val3 := SmartValue{Value: 200, Ignored: "ignore1"} // different Value
 
 		m.Store(key, val1)
 
 		// Test that custom hash and equality work together
-		if actual, ok := m.Load(key); !ok || !actual.Equal(val1) {
+		if actual, ok := m.Load(key); !ok || !actual.EqualFunc(val1) {
 			t.Errorf("Failed to load stored value")
 		}
 
@@ -1683,17 +1683,17 @@ func TestMap_Interfaces(t *testing.T) {
 			t.Error("CompareAndSwap should succeed with custom equality")
 		}
 
-		if actual, ok := m.Load(key); !ok || !actual.Equal(val3) {
+		if actual, ok := m.Load(key); !ok || !actual.EqualFunc(val3) {
 			t.Errorf("Value should be swapped to val3")
 		}
 	})
 
 	t.Run("InterfacePriority", func(t *testing.T) {
-		// Test that explicit WithKeyHasher overrides IHashCode
+		// Test that explicit WithKeyHasher overrides IHashFunc
 
 		// Custom hasher that should take precedence
 		customHasher := func(key HashKey, seed uintptr) uintptr {
-			return uintptr(key)*2 + seed // different from IHashCode
+			return uintptr(key)*2 + seed // different from IHashFunc
 		}
 
 		m := NewMap[HashKey, string](WithKeyHasher(customHasher))
@@ -1703,7 +1703,7 @@ func TestMap_Interfaces(t *testing.T) {
 			t.Errorf("Custom hasher should work, got %s, exists=%v", val, ok)
 		}
 
-		// Test that explicit WithValueEqual overrides IEqual
+		// Test that explicit WithValueEqual overrides IEqualFunc
 
 		// Custom equality that should take precedence
 		customEqual := func(a, b EqualValue) bool {
@@ -3392,7 +3392,7 @@ func TestMapStoreThenParallelDelete_DoesNotShrinkBelowMinLen(
 	}()
 	<-cdone
 	m.Shrink()
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.RootBuckets != minTableLen {
 		t.Fatalf(
 			"table length was different from the minimum: %d",
@@ -3475,42 +3475,42 @@ func TestMapClear(t *testing.T) {
 
 func TestNewMapPresized(t *testing.T) {
 	var capacity, expectedCap int
-	capacity, expectedCap = NewMap[string, string]().Stats().
+	capacity, expectedCap = NewMap[string, string]().stats().
 		Capacity, defaultMinMapTableCap
 	if capacity != expectedCap {
 		t.Fatalf("capacity was different from %d: %d", expectedCap, capacity)
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(0),
-	).Stats().
+	).stats().
 		Capacity, defaultMinMapTableCap
 	if capacity != expectedCap {
 		t.Fatalf("capacity was different from %d: %d", expectedCap, capacity)
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(0),
-	).Stats().
+	).stats().
 		Capacity, defaultMinMapTableCap
 	if capacity != expectedCap {
 		t.Fatalf("capacity was different from %d: %d", expectedCap, capacity)
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(-100),
-	).Stats().
+	).stats().
 		Capacity, defaultMinMapTableCap
 	if capacity != expectedCap {
 		t.Fatalf("capacity was different from %d: %d", expectedCap, capacity)
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(-100),
-	).Stats().
+	).stats().
 		Capacity, defaultMinMapTableCap
 	if capacity != expectedCap {
 		t.Fatalf("capacity was different from %d: %d", expectedCap, capacity)
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(500),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		500,
 	)*entriesPerBucket
@@ -3519,7 +3519,7 @@ func TestNewMapPresized(t *testing.T) {
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(500),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		500,
 	)*entriesPerBucket
@@ -3528,7 +3528,7 @@ func TestNewMapPresized(t *testing.T) {
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(1_000_000),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		1_000_000,
 	)*entriesPerBucket
@@ -3537,7 +3537,7 @@ func TestNewMapPresized(t *testing.T) {
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(1_000_000),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		1_000_000,
 	)*entriesPerBucket
@@ -3546,7 +3546,7 @@ func TestNewMapPresized(t *testing.T) {
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(100),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		100,
 	)*entriesPerBucket
@@ -3555,7 +3555,7 @@ func TestNewMapPresized(t *testing.T) {
 	}
 	capacity, expectedCap = NewMap[string, string](
 		WithCapacity(100),
-	).Stats().
+	).stats().
 		Capacity, calcTableLen(
 		100,
 	)*entriesPerBucket
@@ -3572,7 +3572,7 @@ func TestNewMapPresized_DoesNotShrinkBelowMinLen(t *testing.T) {
 		m.Store(i, i)
 	}
 
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.RootBuckets < minLen {
 		t.Fatalf("table did not grow: %d", stats.RootBuckets)
 	}
@@ -3583,7 +3583,7 @@ func TestNewMapPresized_DoesNotShrinkBelowMinLen(t *testing.T) {
 
 	m.Shrink()
 
-	stats = m.Stats()
+	stats = m.stats()
 	if stats.RootBuckets != minLen {
 		t.Fatalf("table length was different from the minimum: %v", stats)
 	}
@@ -3594,13 +3594,13 @@ func TestNewMapGrowOnly_OnlyShrinksOnClear(t *testing.T) {
 	const numEntries = minLen * entriesPerBucket
 	m := NewMap[int, int](WithCapacity(numEntries))
 
-	stats := m.Stats()
+	stats := m.stats()
 	initialTableLen := stats.RootBuckets
 
 	for i := range 2 * numEntries {
 		m.Store(i, i)
 	}
-	stats = m.Stats()
+	stats = m.stats()
 	maxTableLen := stats.RootBuckets
 	if maxTableLen <= minLen {
 		t.Fatalf("table did not grow: %d", maxTableLen)
@@ -3609,7 +3609,7 @@ func TestNewMapGrowOnly_OnlyShrinksOnClear(t *testing.T) {
 	for i := range numEntries {
 		m.Delete(i)
 	}
-	stats = m.Stats()
+	stats = m.stats()
 	if stats.RootBuckets != maxTableLen {
 		t.Fatalf(
 			"table length was different from the expected: %d",
@@ -3618,7 +3618,7 @@ func TestNewMapGrowOnly_OnlyShrinksOnClear(t *testing.T) {
 	}
 
 	m.Clear()
-	stats = m.Stats()
+	stats = m.stats()
 	if stats.RootBuckets != initialTableLen {
 		t.Fatalf(
 			"table length was different from the initial: %d",
@@ -3634,7 +3634,7 @@ func TestMapResize(t *testing.T) {
 	for i := range numEntries {
 		m.Store(strconv.Itoa(i), i)
 	}
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.Size != numEntries {
 		t.Fatalf("size was too small: %d", stats.Size)
 	}
@@ -3666,7 +3666,7 @@ func TestMapResize(t *testing.T) {
 	}
 	m.Shrink()
 
-	stats = m.Stats()
+	stats = m.stats()
 	if stats.Size > 0 {
 		t.Fatalf("zero size was expected: %d", stats.Size)
 	}
@@ -3695,7 +3695,7 @@ func TestMapResize_CounterLenLimit(t *testing.T) {
 	for i := range numEntries {
 		m.Store("foo"+strconv.Itoa(i), "bar"+strconv.Itoa(i))
 	}
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.Size != numEntries {
 		t.Fatalf("size was too small: %d", stats.Size)
 	}
@@ -4116,7 +4116,7 @@ func TestMapDoesNotLoseEntriesOnResize(t *testing.T) {
 func TestMapStats(t *testing.T) {
 	m := NewMap[int, int]()
 
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.RootBuckets != minTableLen {
 		t.Fatalf("unexpected number of root buckets: %s", stats.String())
 	}
@@ -4143,7 +4143,7 @@ func TestMapStats(t *testing.T) {
 		m.Store(i, i)
 	}
 
-	stats = m.Stats()
+	stats = m.stats()
 	rootBuckes := calcTableLen(200)
 	if stats.RootBuckets > rootBuckes {
 		t.Fatalf("unexpected number of root buckets: %d, %s", rootBuckes, stats.String())
@@ -4502,15 +4502,15 @@ func TestMapClone(t *testing.T) {
 	})
 }
 
-// TestMapRangeProcessEntry tests the ComputeRangeEntries function of Map
+// TestMapRangeProcessEntry tests the computeRangeEntries function of Map
 func TestMapRangeProcessEntry(t *testing.T) {
 	// Test with empty map
 	t.Run("EmptyMap", func(t *testing.T) {
 		m := NewMap[string, int]()
 		processCount := 0
 
-		m.ComputeRangeEntries(
-			func(loaded *Entry[string, int]) (*Entry[string, int], bool) {
+		m.computeRangeEntries(
+			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
 				processCount++
 				return loaded, true // No modification
 			},
@@ -4533,11 +4533,11 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		processCount := 0
-		m.ComputeRangeEntries(
-			func(loaded *Entry[string, int]) (*Entry[string, int], bool) {
+		m.computeRangeEntries(
+			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
 				processCount++
 				// Double all values
-				return &Entry[string, int]{
+				return &mapEntry[string, int]{
 					Key:   loaded.Key,
 					Value: loaded.Value * 2,
 				}, true
@@ -4569,8 +4569,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		// Delete even-numbered entries
-		m.ComputeRangeEntries(
-			func(loaded *Entry[string, int]) (*Entry[string, int], bool) {
+		m.computeRangeEntries(
+			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
 				if loaded.Value%2 == 0 {
 					return nil, true // Delete entry
 				}
@@ -4608,8 +4608,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 			m.Store(strconv.Itoa(i), i)
 		}
 
-		m.ComputeRangeEntries(
-			func(loaded *Entry[string, int]) (*Entry[string, int], bool) {
+		m.computeRangeEntries(
+			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
 				value := loaded.Value
 				switch {
 				case value%3 == 0:
@@ -4617,7 +4617,7 @@ func TestMapRangeProcessEntry(t *testing.T) {
 					return nil, true // Delete entry
 				case value%3 == 1:
 					// Remainder 1: multiply by 10
-					return &Entry[string, int]{
+					return &mapEntry[string, int]{
 						Key:   loaded.Key,
 						Value: value * 10,
 					}, true
@@ -4654,8 +4654,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		// This should not panic or cause data races
-		m.ComputeRangeEntries(
-			func(loaded *Entry[string, int]) (*Entry[string, int], bool) {
+		m.computeRangeEntries(
+			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
 				// Just return the same entry
 				return loaded, true
 			},
@@ -4840,13 +4840,13 @@ func TestMapLoadAndUpdate(t *testing.T) {
 func TestMapGrow_Basic(t *testing.T) {
 	m := NewMap[string, int]()
 
-	initialStats := m.Stats()
+	initialStats := m.stats()
 	initialCapacity := initialStats.Capacity
 	initialBuckets := initialStats.RootBuckets
 
 	m.Grow(1000)
 
-	afterGrowStats := m.Stats()
+	afterGrowStats := m.stats()
 	if afterGrowStats.Capacity <= initialCapacity {
 		t.Fatalf("Grow should increase capacity: initial=%d, after=%d",
 			initialCapacity, afterGrowStats.Capacity)
@@ -4867,10 +4867,10 @@ func TestMapGrow_Basic(t *testing.T) {
 
 func TestMapGrow_ZeroAndNegative(t *testing.T) {
 	m := NewMap[string, int]()
-	initialStats := m.Stats()
+	initialStats := m.stats()
 
 	m.Grow(0)
-	afterZeroStats := m.Stats()
+	afterZeroStats := m.stats()
 	if afterZeroStats.Capacity != initialStats.Capacity {
 		t.Fatal("Grow(0) should not change capacity")
 	}
@@ -4879,7 +4879,7 @@ func TestMapGrow_ZeroAndNegative(t *testing.T) {
 	}
 
 	m.Grow(-100)
-	afterNegativeStats := m.Stats()
+	afterNegativeStats := m.stats()
 	if afterNegativeStats.Capacity != initialStats.Capacity {
 		t.Fatal("Grow(-100) should not change capacity")
 	}
@@ -4893,7 +4893,7 @@ func TestMapGrow_UninitializedMap(t *testing.T) {
 
 	m.Grow(200)
 
-	stats := m.Stats()
+	stats := m.stats()
 	t.Log(stats)
 	if stats.Capacity == 0 {
 		t.Fatal("Map should be initialized after Grow")
@@ -4915,7 +4915,7 @@ func TestMapShrink_Basic(t *testing.T) {
 		m.Store(strconv.Itoa(i), i)
 	}
 
-	afterStoreStats := m.Stats()
+	afterStoreStats := m.stats()
 	initialCapacity := afterStoreStats.Capacity
 	initialBuckets := afterStoreStats.RootBuckets
 
@@ -4925,7 +4925,7 @@ func TestMapShrink_Basic(t *testing.T) {
 
 	m.Shrink()
 
-	afterShrinkStats := m.Stats()
+	afterShrinkStats := m.stats()
 	if afterShrinkStats.Capacity >= initialCapacity {
 		t.Fatalf("Shrink should decrease capacity: initial=%d, after=%d",
 			initialCapacity, afterShrinkStats.Capacity)
@@ -4947,7 +4947,7 @@ func TestMapShrink_Basic(t *testing.T) {
 
 func TestMapShrink_MinLen(t *testing.T) {
 	m := NewMap[string, int](WithCapacity(1000))
-	initialStats := m.Stats()
+	initialStats := m.stats()
 	minBuckets := initialStats.RootBuckets
 
 	for i := range 10 {
@@ -4956,7 +4956,7 @@ func TestMapShrink_MinLen(t *testing.T) {
 
 	m.Shrink()
 
-	afterShrinkStats := m.Stats()
+	afterShrinkStats := m.stats()
 	if afterShrinkStats.RootBuckets < minBuckets {
 		t.Fatalf("Shrink should not go below minLen: min=%d, after=%d",
 			minBuckets, afterShrinkStats.RootBuckets)
@@ -4968,7 +4968,7 @@ func TestMapShrink_UninitializedMap(t *testing.T) {
 
 	m.Shrink()
 
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.Capacity != 0 {
 		t.Fatal("Shrink on uninitialized map should not initialize it")
 	}
@@ -5023,7 +5023,7 @@ func TestMapGrowShrink_Concurrent(t *testing.T) {
 
 	wg.Wait()
 
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.TotalGrowths == 0 {
 		t.Fatal("Should have some growths")
 	}
@@ -5056,8 +5056,8 @@ func TestMapGrow_Performance(t *testing.T) {
 		)
 	}
 
-	stats1 := m1.Stats()
-	stats2 := m2.Stats()
+	stats1 := m1.stats()
+	stats2 := m2.stats()
 
 	if stats2.TotalGrowths > stats1.TotalGrowths {
 		t.Fatalf(
@@ -5089,7 +5089,7 @@ func TestMapShrink_AutomaticVsManual(t *testing.T) {
 	for i := range numEntries - 100 {
 		m1.Delete(strconv.Itoa(i))
 	}
-	stats1 := m1.Stats()
+	stats1 := m1.stats()
 
 	m2 := NewMap[string, int]()
 	for i := range numEntries {
@@ -5099,7 +5099,7 @@ func TestMapShrink_AutomaticVsManual(t *testing.T) {
 		m2.Delete(strconv.Itoa(i))
 	}
 	m2.Shrink()
-	stats2 := m2.Stats()
+	stats2 := m2.stats()
 
 	if stats2.TotalShrinks == 0 {
 		t.Fatal("Manual shrink should increment TotalShrinks")
@@ -5155,7 +5155,7 @@ func TestMapGrowShrink_DataIntegrity(t *testing.T) {
 		}
 	}
 
-	stats := m.Stats()
+	stats := m.stats()
 	if stats.Size != numEntries {
 		t.Fatalf(
 			"Final size mismatch: expected=%d, actual=%d",
@@ -5674,7 +5674,7 @@ func TestMap_LoadEntry(t *testing.T) {
 	m := NewMap[string, int]()
 
 	// Test loading from empty map
-	entry := m.LoadEntry("key1")
+	entry := m.loadEntry("key1")
 	if entry != nil {
 		t.Errorf("Expected nil for non-existent key, got %v", entry)
 	}
@@ -5691,8 +5691,8 @@ func TestMap_LoadEntry(t *testing.T) {
 	// Store a value
 	m.Store("key1", 100)
 
-	// Test LoadEntry and Load consistency for existing key
-	entry = m.LoadEntry("key1")
+	// Test loadEntry and Load consistency for existing key
+	entry = m.loadEntry("key1")
 	if entry == nil {
 		t.Fatal("Expected entry for existing key, got nil")
 	}
@@ -5713,18 +5713,18 @@ func TestMap_LoadEntry(t *testing.T) {
 	}
 	if entry.Value != value {
 		t.Errorf(
-			"LoadEntry and Load returned different values: %v vs %v",
+			"loadEntry and Load returned different values: %v vs %v",
 			entry.Value,
 			value,
 		)
 	}
 
 	// Test non-existent key with both functions
-	entry = m.LoadEntry("key2")
+	entry = m.loadEntry("key2")
 	value, ok = m.Load("key2")
 	if entry != nil {
 		t.Errorf(
-			"Expected LoadEntry to return nil for non-existent key, got %v",
+			"Expected loadEntry to return nil for non-existent key, got %v",
 			entry,
 		)
 	}
@@ -5740,39 +5740,39 @@ func TestMap_LoadEntry(t *testing.T) {
 	m.Store("key3", 300)
 
 	// Test key2
-	entry = m.LoadEntry("key2")
+	entry = m.loadEntry("key2")
 	value, ok = m.Load("key2")
 	if entry == nil || !ok {
-		t.Error("Both LoadEntry and Load should find key2")
+		t.Error("Both loadEntry and Load should find key2")
 	}
 	if entry != nil && entry.Value != value {
 		t.Errorf(
-			"LoadEntry and Load returned different values for key2: %v vs %v",
+			"loadEntry and Load returned different values for key2: %v vs %v",
 			entry.Value,
 			value,
 		)
 	}
 
 	// Test key3
-	entry = m.LoadEntry("key3")
+	entry = m.loadEntry("key3")
 	value, ok = m.Load("key3")
 	if entry == nil || !ok {
-		t.Error("Both LoadEntry and Load should find key3")
+		t.Error("Both loadEntry and Load should find key3")
 	}
 	if entry != nil && entry.Value != value {
 		t.Errorf(
-			"LoadEntry and Load returned different values for key3: %v vs %v",
+			"loadEntry and Load returned different values for key3: %v vs %v",
 			entry.Value,
 			value,
 		)
 	}
 }
 
-// TestMap_InitWithOptions tests the InitWithOptions function
+// TestMap_InitWithOptions tests the withOptions function
 func TestMap_InitWithOptions(t *testing.T) {
 	t.Run("BasicInitialization", func(t *testing.T) {
 		var m Map[string, int]
-		m.InitWithOptions()
+		m.withOptions()
 
 		// Test basic operations
 		m.Store("key1", 100)
@@ -5783,7 +5783,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 
 	t.Run("WithCapacity", func(t *testing.T) {
 		var m Map[string, int]
-		m.InitWithOptions(WithCapacity(1000))
+		m.withOptions(WithCapacity(1000))
 
 		// Verify the map works correctly
 		for i := range 100 {
@@ -5798,7 +5798,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 
 	t.Run("WithAutoShrink", func(t *testing.T) {
 		var m Map[string, int]
-		m.InitWithOptions(WithAutoShrink())
+		m.withOptions(WithAutoShrink())
 
 		// Add and remove items to test shrinking
 		for i := range 100 {
@@ -5825,7 +5825,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 			return uintptr(len(key))
 		}
 
-		m.InitWithOptions(WithKeyHasher(customHash))
+		m.withOptions(WithKeyHasher(customHash))
 
 		// Test operations
 		m.Store("hello", 123)
@@ -5842,7 +5842,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 			return val1 == val2
 		}
 
-		m.InitWithOptions(WithValueEqual(customEqual))
+		m.withOptions(WithValueEqual(customEqual))
 
 		// Test CompareAndSwap with custom equality
 		m.Store("key", 100)
@@ -5861,7 +5861,7 @@ func TestMap_InitWithOptions(t *testing.T) {
 			return uintptr(len(key))
 		}
 
-		m.InitWithOptions(
+		m.withOptions(
 			WithCapacity(500),
 			WithAutoShrink(),
 			WithKeyHasher(customHash),
@@ -5884,8 +5884,8 @@ func TestMap_init(t *testing.T) {
 	t.Run("BasicConfig", func(t *testing.T) {
 		var m Map[string, int]
 		config := &MapConfig{
-			SizeHint:   100,
-			AutoShrink: false,
+			capacity:   100,
+			autoShrink: false,
 		}
 
 		m.init(config)
@@ -5913,10 +5913,10 @@ func TestMap_init(t *testing.T) {
 		}
 
 		config := &MapConfig{
-			KeyHash:    customHash,
-			ValEqual:   customEqual,
-			SizeHint:   200,
-			AutoShrink: true,
+			keyHash:    customHash,
+			valEqual:   customEqual,
+			capacity:   200,
+			autoShrink: true,
 		}
 
 		m.init(config)
@@ -5940,8 +5940,8 @@ func TestMap_init(t *testing.T) {
 	t.Run("ConfigReuse", func(t *testing.T) {
 		// Test that the same config can be used for multiple maps
 		config := &MapConfig{
-			SizeHint:   50,
-			AutoShrink: true,
+			capacity:   50,
+			autoShrink: true,
 		}
 
 		var m1, m2 Map[string, int]
@@ -5992,9 +5992,9 @@ func TestMap_init(t *testing.T) {
 		}
 
 		config := &MapConfig{
-			KeyHash: customHash,
+			keyHash: customHash,
 			// ValEqual is nil, should use default
-			SizeHint: 100,
+			capacity: 100,
 		}
 
 		m.init(config)
@@ -6017,8 +6017,8 @@ func TestMap_init(t *testing.T) {
 
 		config := &MapConfig{
 			// KeyHash is nil, should use default
-			ValEqual: customEqual,
-			SizeHint: 100,
+			valEqual: customEqual,
+			capacity: 100,
 		}
 
 		m.init(config)
@@ -6088,13 +6088,13 @@ func TestMap_EmbeddedHash(t *testing.T) {
 	// These functions are no-ops when synx_embedded_hash build tag is not set
 	// But we still need to call them to get coverage
 
-	t.Run("Entry", func(t *testing.T) {
-		var entry Entry[string, int]
+	t.Run("mapEntry", func(t *testing.T) {
+		var entry mapEntry[string, int]
 
 		// Test getHash - should return 0
 		hash := entry.GetHash()
 		if hash != 0 {
-			t.Errorf("Entry.getHash() = %d, want 0", hash)
+			t.Errorf("mapEntry.getHash() = %d, want 0", hash)
 		}
 
 		// Test setHash - should be a no-op
@@ -6104,11 +6104,11 @@ func TestMap_EmbeddedHash(t *testing.T) {
 		//goland:noinspection ALL
 		if EmbeddedHash {
 			if hash != 0x12345678 {
-				t.Errorf("After setHash, Entry.getHash() = %d, want 0x12345678", hash)
+				t.Errorf("After setHash, mapEntry.getHash() = %d, want 0x12345678", hash)
 			}
 		} else {
 			if hash != 0 {
-				t.Errorf("After setHash, Entry.getHash() = %d, want 0", hash)
+				t.Errorf("After setHash, mapEntry.getHash() = %d, want 0", hash)
 			}
 		}
 	})
@@ -6517,7 +6517,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.ComputeRangeEntries(func(loaded *Entry[int, testValue]) (*Entry[int, testValue], bool) {
+				m.computeRangeEntries(func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					// Verify invariant during processing
 					if v.Y != ^v.X {
@@ -6530,7 +6530,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 						Y:       v.Y,
 						Counter: v.Counter + 1,
 					}
-					return &Entry[int, testValue]{Value: newV}, true
+					return &mapEntry[int, testValue]{Value: newV}, true
 				}, true) // policyOpt = BlockWriters
 				rangeProcessRuns.Add(1)
 				runtime.Gosched()
@@ -6551,7 +6551,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 				default:
 					key := rand.IntN(N)
 					startTime := time.Now()
-					m.ComputeEntry(key, func(loaded *Entry[int, testValue]) (*Entry[int, testValue], testValue, bool) {
+					m.computeEntry(key, func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], testValue, bool) {
 						if loaded == nil {
 							return loaded, testValue{}, false
 						}
@@ -6565,7 +6565,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 							Y:       ^(loaded.Value.X + uint64(writerID)),
 							Counter: loaded.Value.Counter,
 						}
-						return &Entry[int, testValue]{Value: newV}, newV, true
+						return &mapEntry[int, testValue]{Value: newV}, newV, true
 					})
 					runtime.Gosched()
 				}
@@ -6655,7 +6655,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.ComputeRangeEntries(func(loaded *Entry[int, testValue]) (*Entry[int, testValue], bool) {
+				m.computeRangeEntries(func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					// Verify invariant
 					if v.B != ^v.A {
@@ -6668,7 +6668,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 						B:   v.B,
 						Seq: v.Seq + 1,
 					}
-					return &Entry[int, testValue]{Value: newV}, true
+					return &mapEntry[int, testValue]{Value: newV}, true
 				}, false) // policyOpt = AllowWriters
 				rangeProcessRuns.Add(1)
 				runtime.Gosched()
@@ -6688,7 +6688,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.ComputeEntry(key, func(loaded *Entry[int, testValue]) (*Entry[int, testValue], testValue, bool) {
+					m.computeEntry(key, func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], testValue, bool) {
 						if loaded == nil {
 							return loaded, testValue{}, false
 						}
@@ -6700,7 +6700,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 							B:   ^newA,
 							Seq: loaded.Value.Seq,
 						}
-						return &Entry[int, testValue]{Value: newV}, newV, true
+						return &mapEntry[int, testValue]{Value: newV}, newV, true
 					})
 					runtime.Gosched()
 				}
@@ -6810,7 +6810,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.ComputeRangeEntries(func(loaded *Entry[int, complexValue]) (*Entry[int, complexValue], bool) {
+				m.computeRangeEntries(func(loaded *mapEntry[int, complexValue]) (*mapEntry[int, complexValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					validateValue(k, v, "ComputeRange")
 
@@ -6822,7 +6822,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 						Data:     [4]uint64{newID, newID + 1, newID + 2, newID + 3},
 						Tail:     newID,
 					}
-					return &Entry[int, complexValue]{Value: newV}, true
+					return &mapEntry[int, complexValue]{Value: newV}, true
 				}, true) // policyOpt = BlockWriters
 				runtime.Gosched()
 			}
@@ -6884,7 +6884,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.ComputeEntry(key, func(loaded *Entry[int, complexValue]) (*Entry[int, complexValue], complexValue, bool) {
+					m.computeEntry(key, func(loaded *mapEntry[int, complexValue]) (*mapEntry[int, complexValue], complexValue, bool) {
 						if loaded == nil {
 							return loaded, complexValue{}, false
 						}
@@ -6897,7 +6897,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 							Data:     [4]uint64{newID, newID + 1, newID + 2, newID + 3},
 							Tail:     newID,
 						}
-						return &Entry[int, complexValue]{Value: newV}, newV, true
+						return &mapEntry[int, complexValue]{Value: newV}, newV, true
 					})
 					runtime.Gosched()
 				}
@@ -6947,10 +6947,10 @@ func TestMap_RangeProcess_WriterBlocking_Verification(t *testing.T) {
 		defer wg.Done()
 		close(rangeProcessStarted)
 
-		m.ComputeRangeEntries(func(loaded *Entry[int, int]) (*Entry[int, int], bool) {
+		m.computeRangeEntries(func(loaded *mapEntry[int, int]) (*mapEntry[int, int], bool) {
 			// Simulate some processing time
 			time.Sleep(10 * time.Millisecond)
-			return &Entry[int, int]{Value: loaded.Value + 1}, true
+			return &mapEntry[int, int]{Value: loaded.Value + 1}, true
 		}, true) // policyOpt = BlockWriters
 
 		close(rangeProcessDone)

@@ -1,8 +1,6 @@
 package synx
 
 import (
-	"fmt"
-	"strings"
 	"unsafe"
 )
 
@@ -15,49 +13,50 @@ import (
 // to customize the behavior and performance characteristics of a Map
 // instance.
 type MapConfig struct {
-	// KeyHash specifies a custom hash function for keys.
+	// keyHash specifies a custom hash function for keys.
 	// If nil, the built-in hash function will be used.
 	// Custom hash functions can improve performance for specific key types
 	// or provide better hash distribution.
-	KeyHash HashFunc
+	keyHash HashFunc
 
-	// ValEqual specifies a custom equality function for values.
+	// valEqual specifies a custom equality function for values.
 	// If nil, the built-in equality comparison will be used.
 	// This is primarily used for compare-and-swap operations.
 	// Note: Using Compare* methods with non-comparable value types
-	// will panic if ValEqual is nil.
-	ValEqual EqualFunc
+	// will panic if valEqual is nil.
+	valEqual EqualFunc
 
-	// SizeHint provides an estimate of the expected number of entries.
+	// capacity provides an estimate of the expected number of entries.
 	// This is used to pre-allocate the underlying hash table with appropriate
 	// capacity, reducing the need for resizing during initial population.
 	// If zero or negative, the default minimum capacity will be used.
 	// The actual capacity will be rounded up to the next power of 2.
-	SizeHint int
+	capacity int
 
-	// AutoShrink controls whether the map can automatically shrink
+	// autoShrink controls whether the map can automatically shrink
 	// when the load factor falls below the shrink threshold.
 	// When false (default), the map will only grow and never shrink,
 	// which provides better performance but may use more memory.
 	// When true, the map will shrink when occupancy < 1/shrinkFraction.
-	AutoShrink bool
+	autoShrink bool
 
-	// HashOpt specifies the hash distribution optimization strategies to use.
+	// intKey specifies the hash distribution optimization strategies to use.
 	// These options control how hash values are converted to bucket indices
 	// in the h1 function. Different strategies work better for different
 	// key patterns and distributions.
-	// If zero, AutoDistribution will be used (recommended for most cases).
-	HashOpt HashOptimization
+	// If true, linear distribution will be used (optimal for sequential keys).
+	// If false, auto distribution will be used (recommended for most cases).
+	intKey bool
 }
 
 // WithCapacity configuring new Map instance with capacity enough
-// to hold sizeHint entries. The capacity is treated as the minimal
+// to hold cap entries. The capacity is treated as the minimal
 // capacity, meaning that the underlying hash table will never shrink
-// to a smaller capacity. If sizeHint is zero or negative, the value
+// to a smaller capacity. If cap is zero or negative, the value
 // is ignored.
-func WithCapacity(sizeHint int) func(*MapConfig) {
+func WithCapacity(cap int) func(*MapConfig) {
 	return func(c *MapConfig) {
-		c.SizeHint = sizeHint
+		c.capacity = cap
 	}
 }
 
@@ -66,39 +65,9 @@ func WithCapacity(sizeHint int) func(*MapConfig) {
 // Disabled by default to prioritize performance.
 func WithAutoShrink() func(*MapConfig) {
 	return func(c *MapConfig) {
-		c.AutoShrink = true
+		c.autoShrink = true
 	}
 }
-
-// HashOptimization defines hash distribution optimization strategies.
-// These strategies control how hash values are converted to bucket indices
-// in the h1 function, affecting performance for different key patterns.
-type HashOptimization uint8
-
-const (
-	// AutoDistribution automatically selects the most suitable distribution
-	// strategy (default).
-	// Based on key type analysis: integer types use linear distribution,
-	// other types use shift distribution. This provides optimal performance
-	// for most use cases without manual tuning.
-	AutoDistribution HashOptimization = iota
-
-	// LinearDistribution uses division-based bucket index calculation.
-	// Formula: h / entriesPerBucket
-	// Optimal for: sequential integer keys (1,2,3,4...), ordered data,
-	// auto-incrementing IDs, or any pattern with continuous key values.
-	// Provides better cache locality and reduces hash collisions for such
-	// patterns.
-	LinearDistribution
-
-	// ShiftDistribution uses bit-shifting for bucket index calculation.
-	// Formula: h >> 7
-	// Optimal for: randomly distributed keys, string keys, complex types,
-	// or any pattern with pseudo-random hash distribution.
-	// Faster computation but may have suboptimal distribution for sequential
-	// keys.
-	ShiftDistribution
-)
 
 // WithKeyHasher sets a custom key hashing function for the map.
 // This allows you to optimize hash distribution for specific key types
@@ -107,9 +76,9 @@ const (
 // Parameters:
 //   - keyHash: custom hash function that takes a key and seed,
 //     returns hash value. Pass nil to use the default built-in hasher
-//   - opt: optional hash distribution optimization strategies.
-//     Controls how hash values are converted to bucket indices.
-//     If not specified, AutoDistribution will be used.
+//   - intKey: optional hash distribution optimization strategies.
+//     true:  use linear distribution (optimal for sequential keys)
+//     false or omitted: auto-detection is used if this parameter is omitted.
 //
 // Usage:
 //
@@ -117,10 +86,10 @@ const (
 //	m := NewMap[string, int](WithKeyHasher(myCustomHashFunc))
 //
 //	// Custom hasher with linear distribution for sequential keys
-//	m := NewMap[int, string](WithKeyHasher(myIntHasher, LinearDistribution))
+//	m := NewMap[int, string](WithKeyHasher(myIntHasher, true))
 //
 //	// Custom hasher with shift distribution for random keys
-//	m := NewMap[string, int](WithKeyHasher(myStringHasher, ShiftDistribution))
+//	m := NewMap[string, int](WithKeyHasher(myStringHasher, false))
 //
 // Use cases:
 //   - Optimize hash distribution for specific data patterns
@@ -130,15 +99,15 @@ const (
 //   - Combine with distribution strategies for optimal performance
 func WithKeyHasher[K comparable](
 	keyHash func(key K, seed uintptr) uintptr,
-	opt ...HashOptimization,
+	intKey ...bool,
 ) func(*MapConfig) {
 	return func(c *MapConfig) {
 		if keyHash != nil {
-			c.KeyHash = func(pointer unsafe.Pointer, u uintptr) uintptr {
+			c.keyHash = func(pointer unsafe.Pointer, u uintptr) uintptr {
 				return keyHash(*(*K)(pointer), u)
 			}
-			if len(opt) != 0 {
-				c.HashOpt = opt[0]
+			if len(intKey) != 0 {
+				c.intKey = intKey[0]
 			}
 		}
 	}
@@ -153,9 +122,9 @@ func WithKeyHasher[K comparable](
 //   - hs: unsafe hash function that operates on raw unsafe.Pointer.
 //     The pointer points to the key data in memory.
 //     Pass nil to use the default built-in hasher
-//   - opt: optional hash distribution optimization strategies.
-//     Controls how hash values are converted to bucket indices.
-//     If not specified, AutoDistribution will be used.
+//   - intKey: optional hash distribution optimization strategies.
+//     true:  use linear distribution (optimal for sequential keys)
+//     false or omitted: auto-detection is used if this parameter is omitted.
 //
 // Usage:
 //
@@ -168,9 +137,7 @@ func WithKeyHasher[K comparable](
 //	m := NewMap[string, int](WithKeyHasherUnsafe(unsafeHasher))
 //
 //	// Unsafe hasher with specific distribution strategy
-//	m := NewMap[int, string](WithKeyHasherUnsafe(fastIntHasher,
-//
-// LinearDistribution))
+//	m := NewMap[int, string](WithKeyHasherUnsafe(fastIntHasher,true))
 //
 // Notes:
 //   - You must correctly cast unsafe.Pointer to the actual key type
@@ -179,12 +146,12 @@ func WithKeyHasher[K comparable](
 //   - Distribution strategies still apply to the hash output
 func WithKeyHasherUnsafe(
 	hs HashFunc,
-	opt ...HashOptimization,
+	intKey ...bool,
 ) func(*MapConfig) {
 	return func(c *MapConfig) {
-		c.KeyHash = hs
-		if len(opt) != 0 {
-			c.HashOpt = opt[0]
+		c.keyHash = hs
+		if len(intKey) != 0 {
+			c.intKey = intKey[0]
 		}
 	}
 }
@@ -216,7 +183,7 @@ func WithValueEqual[V any](
 ) func(*MapConfig) {
 	return func(c *MapConfig) {
 		if valEqual != nil {
-			c.ValEqual = func(val unsafe.Pointer, val2 unsafe.Pointer) bool {
+			c.valEqual = func(val unsafe.Pointer, val2 unsafe.Pointer) bool {
 				return valEqual(*(*V)(val), *(*V)(val2))
 			}
 		}
@@ -250,7 +217,7 @@ func WithValueEqual[V any](
 //   - Only use if you understand Go's unsafe package
 func WithValueEqualUnsafe(eq EqualFunc) func(*MapConfig) {
 	return func(c *MapConfig) {
-		c.ValEqual = eq
+		c.valEqual = eq
 	}
 }
 
@@ -272,179 +239,9 @@ func WithValueEqualUnsafe(eq EqualFunc) func(*MapConfig) {
 //	m := NewMap[string, int](WithBuiltInHasher[string]())
 func WithBuiltInHasher[T comparable]() func(*MapConfig) {
 	return func(c *MapConfig) {
-		c.KeyHash = GetBuiltInHasher[T]()
+		c.keyHash = GetBuiltInHasher[T]()
 	}
 }
-
-// IHashCode defines a custom hash function interface for key types.
-// Key types implementing this interface can provide their own hash computation,
-// serving as an alternative to WithKeyHasher for type-specific optimization.
-//
-// This interface is automatically detected during Map initialization and
-// takes
-// precedence over the default built-in hasher but is overridden by explicit
-// WithKeyHasher configuration.
-//
-// Usage:
-//
-//	type UserID struct {
-//		ID int64
-//		Tenant string
-//	}
-//
-//	func (u *UserID) HashCode(seed uintptr) uintptr {
-//		return uintptr(u.ID) ^ seed
-//	}
-type IHashCode interface {
-	HashCode(seed uintptr) uintptr
-}
-
-// IHashOpt defines hash distribution optimization interface for key types.
-// Key types implementing this interface can specify their preferred hash
-// distribution strategy, serving as an alternative to WithKeyHasher's opts
-// parameter.
-//
-// Note: IHashOpts only works if Key implements IHashCode.
-//
-// This interface is automatically detected during Map initialization and
-// provides fine-grained control over hash-to-bucket mapping strategies.
-//
-// Usage:
-//
-//	type SequentialID int64
-//
-//	func (*SequentialID) HashOpt() HashOptimization {
-//		return LinearDistribution
-//	}
-type IHashOpt interface {
-	HashOpt() HashOptimization
-}
-
-// IEqual defines a custom equality comparison interface for value types.
-// Value types implementing this interface can provide their own equality logic,
-// serving as an alternative to WithValueEqual for type-specific comparison.
-//
-// This interface is automatically detected during Map initialization and is
-// essential for non-comparable value types or custom equality semantics.
-// It takes precedence over the default built-in comparison but is overridden
-// by explicit WithValueEqual configuration.
-//
-// Usage:
-//
-//	type UserProfile struct {
-//		Name string
-//		Tags []string // slice makes this non-comparable
-//	}
-//
-//	func (u *UserProfile) Equal(other UserProfile) bool {
-//		return u.Name == other.Name && slices.Equal(u.Tags, other.Tags)
-//	}
-type IEqual[T any] interface {
-	Equal(other T) bool
-}
-
-func parseKeyInterface[K comparable]() (keyHash HashFunc, hashOpt HashOptimization) {
-	var k *K
-	if _, ok := any(k).(IHashCode); ok {
-		keyHash = func(ptr unsafe.Pointer, seed uintptr) uintptr {
-			return any((*K)(ptr)).(IHashCode).HashCode(seed)
-		}
-		if _, ok = any(k).(IHashOpt); ok {
-			hashOpt = any(*new(K)).(IHashOpt).HashOpt()
-		}
-	}
-	return
-}
-
-func parseValueInterface[V any]() (valEqual EqualFunc) {
-	var v *V
-	if _, ok := any(v).(IEqual[V]); ok {
-		valEqual = func(ptr unsafe.Pointer, other unsafe.Pointer) bool {
-			return any((*V)(ptr)).(IEqual[V]).Equal(*(*V)(other))
-		}
-	}
-	return
-}
-
-func (cfg *MapConfig) parseIntKey(intKey *bool) {
-	switch cfg.HashOpt {
-	case LinearDistribution:
-		*intKey = true
-	case ShiftDistribution:
-		*intKey = false
-	default:
-		// AutoDistribution: default distribution
-	}
-}
-
-// ============================================================================
-// Statistics
-// ============================================================================
-
-// MapStats is Map statistics.
-//
-// Notes:
-//   - map statistics are intended to be used for diagnostic
-//     purposes, not for production code. This means that breaking changes
-//     may be introduced into this struct even between minor releases.
-type MapStats struct {
-	// RootBuckets is the number of root buckets in the hash table.
-	// Each bucket holds a few entries.
-	RootBuckets int
-	// TotalBuckets is the total number of buckets in the hash table,
-	// including root and their chained buckets. Each bucket holds
-	// a few entries.
-	TotalBuckets int
-	// EmptyBuckets is the number of buckets that hold no entries.
-	EmptyBuckets int
-	// Capacity is the Map capacity, i.e., the total number of
-	// entries that all buckets can physically hold. This number
-	// does not consider the loadEntry factor.
-	Capacity int
-	// Size is the exact number of entries stored in the map.
-	Size int
-	// Counter is the number of entries stored in the map according
-	// to the internal atomic counter. In the case of concurrent map
-	// modifications, this number may be different from Size.
-	Counter int
-	// CounterLen is the number of internal atomic counter stripes.
-	// This number may grow with the map capacity to improve
-	// multithreaded scalability.
-	CounterLen int
-	// MinEntries is the minimum number of entries per a chain of
-	// buckets, i.e., a root bucket and its chained buckets.
-	MinEntries int
-	// MinEntries is the maximum number of entries per a chain of
-	// buckets, i.e., a root bucket and its chained buckets.
-	MaxEntries int
-	// TotalGrowths is the number of times the hash table grew.
-	TotalGrowths uint32
-	// TotalGrowths is the number of times the hash table shrunk.
-	TotalShrinks uint32
-}
-
-// String returns string representation of map stats.
-func (s *MapStats) String() string {
-	var sb strings.Builder
-	sb.WriteString("MapStats{\n")
-	sb.WriteString(fmt.Sprintf("RootBuckets:  %d\n", s.RootBuckets))
-	sb.WriteString(fmt.Sprintf("TotalBuckets: %d\n", s.TotalBuckets))
-	sb.WriteString(fmt.Sprintf("EmptyBuckets: %d\n", s.EmptyBuckets))
-	sb.WriteString(fmt.Sprintf("Capacity:     %d\n", s.Capacity))
-	sb.WriteString(fmt.Sprintf("Size:         %d\n", s.Size))
-	sb.WriteString(fmt.Sprintf("Counter:      %d\n", s.Counter))
-	sb.WriteString(fmt.Sprintf("CounterLen:   %d\n", s.CounterLen))
-	sb.WriteString(fmt.Sprintf("MinEntries:   %d\n", s.MinEntries))
-	sb.WriteString(fmt.Sprintf("MaxEntries:   %d\n", s.MaxEntries))
-	sb.WriteString(fmt.Sprintf("TotalGrowths: %d\n", s.TotalGrowths))
-	sb.WriteString(fmt.Sprintf("TotalShrinks: %d\n", s.TotalShrinks))
-	sb.WriteString("}\n")
-	return sb.String()
-}
-
-// ============================================================================
-// Hash Utilities
-// ============================================================================
 
 // GetBuiltInHasher returns Go's built-in hash function for the specified type.
 // This function provides direct access to the same hash function that Go's
@@ -461,4 +258,82 @@ func (s *MapStats) String() string {
 func GetBuiltInHasher[T comparable]() HashFunc {
 	keyHash, _ := defaultHasherUsingBuiltIn[T, struct{}]()
 	return keyHash
+}
+
+// IHashFunc defines a custom hash function interface for key types.
+// Key types implementing this interface can provide their own hash computation,
+// serving as an alternative to WithKeyHasher for type-specific optimization.
+//
+// This interface is automatically detected during Map initialization and
+// takes
+// precedence over the default built-in hasher but is overridden by explicit
+// WithKeyHasher configuration.
+//
+// Usage:
+//
+//	type UserID struct {
+//		ID int64
+//		Tenant string
+//	}
+//
+//	func (u *UserID) HashFunc(seed uintptr) uintptr {
+//		return uintptr(u.ID) ^ seed
+//	}
+type IHashFunc interface {
+	HashFunc(seed uintptr) uintptr
+}
+
+// IIntKey optional interface for key types to signal hash distribution
+// optimization strategies.
+//   - true:  use linear distribution (optimal for sequential keys)
+//   - false or omitted: auto-detection is used if this parameter is omitted.
+type IIntKey interface {
+	IntKey() bool
+}
+
+// IEqualFunc defines a custom equality comparison interface for value types.
+// Value types implementing this interface can provide their own equality logic,
+// serving as an alternative to WithValueEqual for type-specific comparison.
+//
+// This interface is automatically detected during Map initialization and is
+// essential for non-comparable value types or custom equality semantics.
+// It takes precedence over the default built-in comparison but is overridden
+// by explicit WithValueEqual configuration.
+//
+// Usage:
+//
+//	type UserProfile struct {
+//		Name string
+//		Tags []string // slice makes this non-comparable
+//	}
+//
+//	func (u *UserProfile) EqualFunc(other UserProfile) bool {
+//		return u.Name == other.Name && slices.EqualFunc(u.Tags, other.Tags)
+//	}
+type IEqualFunc[T any] interface {
+	EqualFunc(other T) bool
+}
+
+func parseKeyInterface[K comparable]() (keyHash HashFunc, intKey bool) {
+	var k *K
+	if _, ok := any(k).(IHashFunc); ok {
+		keyHash = func(ptr unsafe.Pointer, seed uintptr) uintptr {
+			return any((*K)(ptr)).(IHashFunc).HashFunc(seed)
+		}
+
+		if _, ok = any(k).(IIntKey); ok {
+			intKey = any(*new(K)).(IIntKey).IntKey()
+		}
+	}
+	return
+}
+
+func parseValueInterface[V any]() (valEqual EqualFunc) {
+	var v *V
+	if _, ok := any(v).(IEqualFunc[V]); ok {
+		valEqual = func(ptr unsafe.Pointer, other unsafe.Pointer) bool {
+			return any((*V)(ptr)).(IEqualFunc[V]).EqualFunc(*(*V)(other))
+		}
+	}
+	return
 }

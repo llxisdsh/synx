@@ -1,8 +1,10 @@
 package synx
 
 import (
+	"fmt"
 	"math/bits"
 	"reflect"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -137,15 +139,15 @@ func calcParallelism(items, threshold, cpus int) (chunkSz, chunks int) {
 // return value must be a power of 2
 //
 //go:nosplit
-func calcTableLen(sizeHint int) int {
+func calcTableLen(capacity int) int {
 	tableLen := minTableLen
-	const minSizeHintThreshold = int(float64(minTableLen*entriesPerBucket) * loadFactor)
-	if sizeHint >= minSizeHintThreshold {
-		const invSizeHintFactor = 1.0 / (float64(entriesPerBucket) * loadFactor)
+	const minThreshold = int(float64(minTableLen*entriesPerBucket) * loadFactor)
+	if capacity >= minThreshold {
+		const invFactor = 1.0 / (float64(entriesPerBucket) * loadFactor)
 		// +entriesPerBucket-1 is used to compensate for calculation
 		// inaccuracies
 		tableLen = nextPowOf2(
-			int(float64(sizeHint+entriesPerBucket-1) * invSizeHintFactor),
+			int(float64(capacity+entriesPerBucket-1) * invFactor),
 		)
 	}
 	return tableLen
@@ -377,6 +379,47 @@ func runtime_canSpin(i int) bool
 //goland:noinspection ALL
 func runtime_doSpin()
 
+// Concurrency variable access rules
+// 1. If a variable has atomic writes outside locks:
+//    - Must use atomic loads AND stores inside locks
+//    - Example:
+//      var value int32
+//      func update() {
+//          atomic.StoreInt32(&value, 1) // external atomic write
+//      }
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          v := atomic.LoadInt32(&value) // internal atomic load
+//          atomic.StoreInt32(&value, v+1) // internal atomic store
+//      }
+//
+// 2. If a variable only has atomic reads outside locks:
+//    - Only need atomic stores inside locks (atomic loads not required)
+//    - Example:
+//      func read() int32 {
+//          return atomic.LoadInt32(&value) // external atomic read
+//      }
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          // Normal read sufficient (lock guarantees visibility)
+//          v := value
+//          // But writes need atomic store:
+//          atomic.StoreInt32(&value, 42)
+//      }
+//
+// 3. If a variable has no external access:
+//    - No atomic operations needed inside locks
+//    - Normal reads/writes sufficient (lock provides full protection)
+//    - Example:
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          value = 42 // normal write
+//          v := value // normal read
+//      }
+
 // ============================================================================
 // Hash Utilities
 // ============================================================================
@@ -585,45 +628,66 @@ type iEmptyInterface struct {
 }
 
 // ============================================================================
-// Concurrency variable access rules
+// Statistics Utilities
 // ============================================================================
 
-// 1. If a variable has atomic writes outside locks:
-//    - Must use atomic loads AND stores inside locks
-//    - Example:
-//      var value int32
-//      func update() {
-//          atomic.StoreInt32(&value, 1) // external atomic write
-//      }
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          v := atomic.LoadInt32(&value) // internal atomic load
-//          atomic.StoreInt32(&value, v+1) // internal atomic store
-//      }
+// mapStats is Map statistics.
 //
-// 2. If a variable only has atomic reads outside locks:
-//    - Only need atomic stores inside locks (atomic loads not required)
-//    - Example:
-//      func read() int32 {
-//          return atomic.LoadInt32(&value) // external atomic read
-//      }
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          // Normal read sufficient (lock guarantees visibility)
-//          v := value
-//          // But writes need atomic store:
-//          atomic.StoreInt32(&value, 42)
-//      }
-//
-// 3. If a variable has no external access:
-//    - No atomic operations needed inside locks
-//    - Normal reads/writes sufficient (lock provides full protection)
-//    - Example:
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          value = 42 // normal write
-//          v := value // normal read
-//      }
+// Notes:
+//   - map statistics are intended to be used for diagnostic
+//     purposes, not for production code. This means that breaking changes
+//     may be introduced into this struct even between minor releases.
+type mapStats struct {
+	// RootBuckets is the number of root buckets in the hash table.
+	// Each bucket holds a few entries.
+	RootBuckets int
+	// TotalBuckets is the total number of buckets in the hash table,
+	// including root and their chained buckets. Each bucket holds
+	// a few entries.
+	TotalBuckets int
+	// EmptyBuckets is the number of buckets that hold no entries.
+	EmptyBuckets int
+	// Capacity is the Map capacity, i.e., the total number of
+	// entries that all buckets can physically hold. This number
+	// does not consider the loadEntry_ factor.
+	Capacity int
+	// Size is the exact number of entries stored in the map.
+	Size int
+	// Counter is the number of entries stored in the map according
+	// to the internal atomic counter. In the case of concurrent map
+	// modifications, this number may be different from Size.
+	Counter int
+	// CounterLen is the number of internal atomic counter stripes.
+	// This number may grow with the map capacity to improve
+	// multithreaded scalability.
+	CounterLen int
+	// MinEntries is the minimum number of entries per a chain of
+	// buckets, i.e., a root bucket and its chained buckets.
+	MinEntries int
+	// MinEntries is the maximum number of entries per a chain of
+	// buckets, i.e., a root bucket and its chained buckets.
+	MaxEntries int
+	// TotalGrowths is the number of times the hash table grew.
+	TotalGrowths uint32
+	// TotalGrowths is the number of times the hash table shrunk.
+	TotalShrinks uint32
+}
+
+// String returns string representation of map stats.
+func (s *mapStats) String() string {
+	var sb strings.Builder
+	sb.WriteString("mapStats{\n")
+	sb.WriteString(fmt.Sprintf("RootBuckets:  %d\n", s.RootBuckets))
+	sb.WriteString(fmt.Sprintf("TotalBuckets: %d\n", s.TotalBuckets))
+	sb.WriteString(fmt.Sprintf("EmptyBuckets: %d\n", s.EmptyBuckets))
+	sb.WriteString(fmt.Sprintf("Capacity:     %d\n", s.Capacity))
+	sb.WriteString(fmt.Sprintf("Size:         %d\n", s.Size))
+	sb.WriteString(fmt.Sprintf("Counter:      %d\n", s.Counter))
+	sb.WriteString(fmt.Sprintf("CounterLen:   %d\n", s.CounterLen))
+	sb.WriteString(fmt.Sprintf("MinEntries:   %d\n", s.MinEntries))
+	sb.WriteString(fmt.Sprintf("MaxEntries:   %d\n", s.MaxEntries))
+	sb.WriteString(fmt.Sprintf("TotalGrowths: %d\n", s.TotalGrowths))
+	sb.WriteString(fmt.Sprintf("TotalShrinks: %d\n", s.TotalShrinks))
+	sb.WriteString("}\n")
+	return sb.String()
+}

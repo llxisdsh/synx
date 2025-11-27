@@ -76,11 +76,10 @@ type flatBucket[K comparable, V any] struct {
 //     writers.
 //
 // Configuration options (aligned with Map):
-//   - WithCapacity(sizeHint): pre-allocate capacity to reduce early resizes.
+//   - WithCapacity(cap): pre-allocate capacity to reduce early resizes.
 //   - WithAutoShrink(): enable automatic shrinking when load drops.
 //   - WithKeyHasher / WithKeyHasherUnsafe / WithBuiltInHasher: custom or
 //     built-in hashing.
-//   - HashOptimization: control h1 distribution strategy (Linear/Shift/Auto).
 //
 // Example:
 //
@@ -103,20 +102,22 @@ func (m *FlatMap[K, V]) init(
 	cfg *MapConfig,
 ) {
 	// parse interface
-	if cfg.KeyHash == nil {
-		cfg.KeyHash, cfg.HashOpt = parseKeyInterface[K]()
+	if cfg.keyHash == nil {
+		cfg.keyHash, cfg.intKey = parseKeyInterface[K]()
 	}
 	// perform initialization
 	m.keyHash, _, m.intKey = defaultHasher[K, V]()
-	if cfg.KeyHash != nil {
-		m.keyHash = cfg.KeyHash
-		cfg.parseIntKey(&m.intKey)
+	if cfg.keyHash != nil {
+		m.keyHash = cfg.keyHash
+		if cfg.intKey {
+			m.intKey = true
+		}
 	}
 
 	m.seed = uintptr(rand.Uint64())
-	m.shrinkOn = cfg.AutoShrink
+	m.shrinkOn = cfg.autoShrink
 	var newTable flatTable[K, V]
-	tableLen := calcTableLen(cfg.SizeHint)
+	tableLen := calcTableLen(cfg.capacity)
 	newTable.makeTable(tableLen, runtime.GOMAXPROCS(0))
 	m.tableSeq.WriteLocked(&m.table, newTable)
 }
@@ -449,8 +450,8 @@ func (m *FlatMap[K, V]) Compute(
 			if atomic.LoadPointer(&m.rs) == nil {
 				tableLen := table.mask + 1
 				size := table.SumSize()
-				const sizeHintFactor = float64(entriesPerBucket) * loadFactor
-				if size >= int(float64(tableLen)*sizeHintFactor) {
+				const capFactor = float64(entriesPerBucket) * loadFactor
+				if size >= int(float64(tableLen)*capFactor) {
 					m.tryResize(mapGrowHint, size, 0)
 				}
 			}
@@ -594,11 +595,11 @@ func (m *FlatMap[K, V]) All() func(yield func(K, V) bool) {
 	return m.Range
 }
 
-// ComputeAll returns an iterator function for use with range-over-func.
+// ComputeIter returns an iterator function for use with range-over-func.
 // It provides the same functionality as ComputeRange but in iterator form.
 //
 //go:nosplit
-func (m *FlatMap[K, V]) ComputeAll(
+func (m *FlatMap[K, V]) ComputeIter(
 	blockWriters ...bool,
 ) func(yield func(e *FlatMapIter[K, V]) bool) {
 	return func(yield func(e *FlatMapIter[K, V]) bool) {

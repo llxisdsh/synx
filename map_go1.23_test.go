@@ -14,7 +14,7 @@ func TestMap_Entries_Basic(t *testing.T) {
 
 	got := make(map[string]int)
 	count := 0
-	for e := range m.Entries() {
+	for e := range m.entries() {
 		got[e.Key] = e.Value
 		count++
 	}
@@ -33,7 +33,7 @@ func TestMap_Entries_EarlyStop(t *testing.T) {
 	}
 
 	count := 0
-	for range m.Entries() {
+	for range m.entries() {
 		count++
 		if count >= 2 {
 			break
@@ -47,7 +47,7 @@ func TestMap_Entries_EarlyStop(t *testing.T) {
 func TestMap_Entries_Empty(t *testing.T) {
 	var m Map[int, int]
 	count := 0
-	for range m.Entries() {
+	for range m.entries() {
 		count++
 	}
 	if count != 0 {
@@ -55,7 +55,7 @@ func TestMap_Entries_Empty(t *testing.T) {
 	}
 }
 
-// TestMap_ComputeAll_UpdateDelete verifies ComputeAll iteration can update and delete entries.
+// TestMap_ComputeAll_UpdateDelete verifies ComputeIter iteration can update and delete entries.
 func TestMap_ComputeAll_UpdateDelete(t *testing.T) {
 	m := NewMap[int, int]()
 	const N = 128
@@ -64,7 +64,7 @@ func TestMap_ComputeAll_UpdateDelete(t *testing.T) {
 		m.Store(i, i)
 	}
 
-	for it := range m.ComputeAll() {
+	for it := range m.ComputeIter() {
 		if it.Key()%2 == 0 {
 			it.Update(it.Value() + 1)
 		} else {
@@ -95,7 +95,7 @@ func TestMap_ComputeAll_EarlyStop(t *testing.T) {
 	}
 
 	processed := 0
-	for it := range m.ComputeAll() {
+	for it := range m.ComputeIter() {
 		it.Update(it.Value() + 1000)
 		processed++
 		if processed == 10 {
