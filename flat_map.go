@@ -271,6 +271,10 @@ func (m *FlatMap[K, V]) Delete(key K) {
 
 // FlatMapEntry represents an entry being processed in Compute/ComputeRange operations.
 // It provides methods to update or delete the entry during iteration.
+// WARNING: Transient view valid only within the callback. Never store or retain
+// this struct or its pointer beyond the callback; doing so may lead to dangling
+// pointers and invalid references.
+// 警告：此结构体仅在回调期间有效；不要保存或持有其指针，避免悬垂指针。
 type FlatMapEntry[K comparable, V any] struct {
 	entry  FlatEntry_[K, V]
 	loaded bool
