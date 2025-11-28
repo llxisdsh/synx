@@ -18,9 +18,11 @@ func TestOnceGroup_DoDuplicates(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n)
 	sharedCount := int32(0)
+	start := make(chan struct{})
 	for range n {
 		go func() {
 			defer wg.Done()
+			<-start
 			v, err, shared := g.Do(key, func() (int, error) {
 				atomic.AddInt32(&calls, 1)
 				time.Sleep(2 * time.Millisecond)
@@ -34,6 +36,7 @@ func TestOnceGroup_DoDuplicates(t *testing.T) {
 			}
 		}()
 	}
+	close(start)
 	wg.Wait()
 
 	if calls != 1 {
