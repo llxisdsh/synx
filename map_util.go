@@ -189,11 +189,18 @@ func nextPowOf2(n int) int {
 // USE CAREFULLY!
 //
 //go:nosplit
+//go:nocheckptr
 func noescape(p unsafe.Pointer) unsafe.Pointer {
 	x := uintptr(p)
 	//nolint:all
 	//goland:noinspection ALL
 	return unsafe.Pointer(x ^ 0)
+}
+
+//go:nosplit
+//go:nocheckptr
+func noEscape[T any](p *T) *T {
+	return (*T)(noescape(unsafe.Pointer(p)))
 }
 
 // ============================================================================
@@ -352,6 +359,7 @@ func trySpin(spins *int) bool {
 	return false
 }
 
+//go:nosplit
 func delay(spins *int) {
 	if trySpin(spins) {
 		return
@@ -649,7 +657,7 @@ type mapStats struct {
 	EmptyBuckets int
 	// Capacity is the Map capacity, i.e., the total number of
 	// entries that all buckets can physically hold. This number
-	// does not consider the loadEntry_ factor.
+	// does not consider the loadEntry factor.
 	Capacity int
 	// Size is the exact number of entries stored in the map.
 	Size int

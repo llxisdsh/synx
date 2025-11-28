@@ -9,9 +9,9 @@ import (
 	"unsafe"
 )
 
-// IsTSO detects TSO architectures; on TSO, plain reads/writes are safe for
+// IsTSO_ detects TSO architectures; on TSO, plain reads/writes are safe for
 // pointers and native word-sized integers
-const IsTSO = runtime.GOARCH == "amd64" ||
+const IsTSO_ = runtime.GOARCH == "amd64" ||
 	runtime.GOARCH == "386" ||
 	runtime.GOARCH == "s390x"
 
@@ -21,7 +21,7 @@ const IsTSO = runtime.GOARCH == "amd64" ||
 //go:nosplit
 func LoadPtr(addr *unsafe.Pointer) unsafe.Pointer {
 	//goland:noinspection ALL
-	if IsTSO {
+	if IsTSO_ {
 		return *addr
 	} else {
 		return atomic.LoadPointer(addr)
@@ -34,7 +34,7 @@ func LoadPtr(addr *unsafe.Pointer) unsafe.Pointer {
 //go:nosplit
 func StorePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 	//goland:noinspection ALL
-	if IsTSO {
+	if IsTSO_ {
 		*addr = val
 	} else {
 		atomic.StorePointer(addr, val)
@@ -48,14 +48,14 @@ func StorePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 func LoadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 	if unsafe.Sizeof(T(0)) == unsafe.Sizeof(uint32(0)) {
 		//goland:noinspection ALL
-		if IsTSO {
+		if IsTSO_ {
 			return *addr
 		} else {
 			return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
 		}
 	} else {
 		//goland:noinspection ALL
-		if IsTSO && bits.UintSize >= 64 {
+		if IsTSO_ && bits.UintSize >= 64 {
 			return *addr
 		} else {
 			return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
@@ -70,14 +70,14 @@ func LoadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 func StoreInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
 	if unsafe.Sizeof(T(0)) == unsafe.Sizeof(uint32(0)) {
 		//goland:noinspection ALL
-		if IsTSO {
+		if IsTSO_ {
 			*addr = val
 		} else {
 			atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
 		}
 	} else {
 		//goland:noinspection ALL
-		if IsTSO && bits.UintSize >= 64 {
+		if IsTSO_ && bits.UintSize >= 64 {
 			*addr = val
 		} else {
 			atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))

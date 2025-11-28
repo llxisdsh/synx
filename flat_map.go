@@ -50,7 +50,7 @@ type flatRebuildState[K comparable, V any] struct {
 type flatTable[K comparable, V any] struct {
 	buckets  unsafeSlice[flatBucket[K, V]]
 	mask     int
-	size     unsafeSlice[CounterStripe]
+	size     unsafeSlice[CounterStripe_]
 	sizeMask uint32
 	// The inline size has minimal effect on reducing cache misses,
 	// so we will not use it for now.
@@ -59,10 +59,10 @@ type flatTable[K comparable, V any] struct {
 
 type flatBucket[K comparable, V any] struct {
 	_       [0]atomic.Uint64
-	meta    uint64                            // op byte + h2 bytes
-	seq     seqlock[uintptr, FlatEntry[K, V]] // seqlock of bucket
-	next    unsafe.Pointer                    // *flatBucket[K,V]
-	entries [entriesPerBucket]seqlockSlot[FlatEntry[K, V]]
+	meta    uint64                             // op byte + h2 bytes
+	seq     seqlock[uintptr, FlatEntry_[K, V]] // seqlock of bucket
+	next    unsafe.Pointer                     // *flatBucket[K,V]
+	entries [entriesPerBucket]seqlockSlot[FlatEntry_[K, V]]
 }
 
 // NewFlatMap creates a new seqlock-based flat hash map.
@@ -91,10 +91,10 @@ func NewFlatMap[K comparable, V any](
 ) *FlatMap[K, V] {
 	var cfg MapConfig
 	for _, o := range options {
-		o(&cfg)
+		o(noEscape(&cfg))
 	}
 	m := &FlatMap[K, V]{}
-	m.init(&cfg)
+	m.init(noEscape(&cfg))
 	return m
 }
 
@@ -143,8 +143,8 @@ func (m *FlatMap[K, V]) slowInit() {
 		m.endRebuild(rs)
 		return
 	}
-	cfg := &MapConfig{}
-	m.init(cfg)
+	var cfg MapConfig
+	m.init(&cfg)
 	m.endRebuild(rs)
 }
 
@@ -171,7 +171,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
 			e := b.seq.Read(b.At(j))
-			if EmbeddedHash {
+			if EmbeddedHash_ {
 				if e.GetHash() == hash && e.Key == key {
 					return e.Value, true
 				}
@@ -185,126 +185,136 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	return
 }
 
-// Range iterates all entries using per-bucket seqlock reads.
-//
-//   - Copies a consistent snapshot from each bucket when the sequence is
-//     stable; otherwise briefly spins and retries.
-//   - Yields outside of locks to minimize contention.
-//   - Returning false from the callback stops iteration early.
-func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
-	table := m.tableSeq.Read(&m.table)
-	if table.buckets.ptr == nil {
-		return
+// LoadOrStore returns the existing value for the key if present.
+// Otherwise, it stores and returns the given value.
+// The loaded result is true if the value was loaded, false if stored.
+func (m *FlatMap[K, V]) LoadOrStore(
+	key K,
+	value V,
+) (actual V, loaded bool) {
+	if v, ok := m.Load(key); ok {
+		return v, true
 	}
-
-	var meta uint64
-	var cache [entriesPerBucket]FlatEntry[K, V]
-	var cacheCount int
-	for i := 0; i <= table.mask; i++ {
-		root := table.buckets.At(i)
-		for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
-			var spins int
-			for {
-				if s1, ok := b.seq.BeginRead(); ok {
-					meta = atomic.LoadUint64(&b.meta)
-					cacheCount = 0
-					for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-						j := firstMarkedByteIndex(marked)
-						cache[cacheCount] = b.At(j).ReadUnfenced()
-						cacheCount++
-					}
-					if b.seq.EndRead(s1) {
-						for j := range cacheCount {
-							kv := &cache[j]
-							if !yield(kv.Key, kv.Value) {
-								return
-							}
-						}
-						break
-					}
-				}
-				delay(&spins)
-			}
-		}
-	}
-}
-
-// ComputeRange iterates all entries and applies a user callback.
-//
-// Callback signature:
-//
-//		fn(e *FlatMapIter[K, V]) bool
-//
-//	  - e.Update(newV): update the entry to newV
-//	  - e.Delete(): delete the entry
-//	  - default (no op): keep the entry unchanged
-//	  - return true to continue; return false to stop iteration immediately
-//	    (the entry passed to the final callback is not modified when stopping)
-//
-// Concurrency & consistency:
-//   - Cooperates with concurrent grow/shrink; if a resize is detected, it
-//     helps complete copying, then continues on the latest table.
-//   - Holds the root-bucket lock while processing its bucket chain to
-//     coordinate with writers/resize operations.
-//   - Uses per-bucket seqlock to minimize write windows and preserve reader
-//     consistency.
-//
-// Parameters:
-//   - fn: user function applied to each key-value pair.
-//   - blockWriters: optional flag (default false). If true, concurrent writers
-//     are blocked during iteration; resize operations are always exclusive.
-//
-// Recommendation: keep fn lightweight to reduce lock hold time.
-func (m *FlatMap[K, V]) ComputeRange(
-	fn func(e *FlatMapIter[K, V]) bool,
-	blockWriters ...bool,
-) {
-	hint := mapRebuildAllowWritersHint
-	if len(blockWriters) != 0 && blockWriters[0] {
-		hint = mapRebuildBlockWritersHint
-	}
-
-	m.rebuild(hint, func() {
-		table := m.tableSeq.Read(&m.table)
-		if table.buckets.ptr == nil {
+	return m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		if e.Loaded() {
 			return
 		}
-		it := FlatMapIter[K, V]{
-			loaded: true,
+		e.Update(value)
+	})
+}
+
+// LoadOrStoreFn loads the value for a key if present.
+// Otherwise, it stores and returns the value returned by valueFn.
+// The loaded result is true if the value was loaded, false if stored.
+func (m *FlatMap[K, V]) LoadOrStoreFn(
+	key K,
+	valueFn func() V,
+) (actual V, loaded bool) {
+	if v, ok := m.Load(key); ok {
+		return v, true
+	}
+	return m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		if e.Loaded() {
+			return
 		}
-		for i := 0; i <= table.mask; i++ {
-			root := table.buckets.At(i)
-			root.Lock()
-			for b := root; b != nil; b = (*flatBucket[K, V])(b.next) {
-				meta := LoadIntFast(&b.meta)
-				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-					j := firstMarkedByteIndex(marked)
-					e := b.At(j)
-					it.entry = *e.Ptr()
-					it.op = cancelOp
-					shouldContinue := fn(&it)
-					switch it.op {
-					case updateOp:
-						b.seq.WriteLocked(e, it.entry)
-					case deleteOp:
-						b.seq.BeginWriteLocked()
-						e.WriteUnfenced(FlatEntry[K, V]{})
-						meta = setByte(meta, emptySlot, j)
-						atomic.StoreUint64(&b.meta, meta)
-						b.seq.EndWriteLocked()
-						table.AddSize(i, -1)
-					default:
-						// cancelOp: No-op
-					}
-					if !shouldContinue {
-						root.Unlock()
-						return
-					}
-				}
-			}
-			root.Unlock()
+		e.Update(valueFn())
+	})
+}
+
+// LoadAndUpdate updates the value for key if it exists, returning the previous
+// value. The loaded result reports whether the key was present.
+func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
+	_, loaded = m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		if e.Loaded() {
+			previous = e.Value()
+			e.Update(value)
 		}
 	})
+	return
+}
+
+// LoadAndDelete deletes the value for a key, returning the previous value.
+// The loaded result reports whether the key was present.
+func (m *FlatMap[K, V]) LoadAndDelete(key K) (previous V, loaded bool) {
+	_, loaded = m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		if e.Loaded() {
+			previous = e.Value()
+			e.Delete()
+		}
+	})
+	return
+}
+
+// Store sets the value for a key.
+func (m *FlatMap[K, V]) Store(key K, value V) {
+	m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		e.Update(value)
+	})
+}
+
+// Swap stores value for key and returns the previous value if any.
+// The loaded result reports whether the key was present.
+func (m *FlatMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
+	_, loaded = m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		previous = e.Value()
+		e.Update(value)
+	})
+	return
+}
+
+// Delete deletes the value for a key.
+func (m *FlatMap[K, V]) Delete(key K) {
+	m.Compute(key, func(e *FlatMapEntry[K, V]) {
+		e.Delete()
+	})
+}
+
+// FlatMapEntry represents an entry being processed in Compute/ComputeRange operations.
+// It provides methods to update or delete the entry during iteration.
+type FlatMapEntry[K comparable, V any] struct {
+	entry  FlatEntry_[K, V]
+	loaded bool
+	op     computeOp
+}
+
+// Key returns the key of the current entry.
+//
+//go:nosplit
+func (e *FlatMapEntry[K, V]) Key() K {
+	return e.entry.Key
+}
+
+// Value returns the value of the current entry.
+//
+//go:nosplit
+func (e *FlatMapEntry[K, V]) Value() V {
+	return e.entry.Value
+}
+
+// Loaded returns true if the entry is loaded, false otherwise.
+//
+//go:nosplit
+func (e *FlatMapEntry[K, V]) Loaded() bool {
+	return e.loaded
+}
+
+// Update performs an upsert on the current entry.
+// If Loaded()==true, replaces the value;
+// if false, inserts the key with newValue.
+//
+//go:nosplit
+func (e *FlatMapEntry[K, V]) Update(newValue V) {
+	e.entry.Value = newValue
+	e.op = updateOp
+}
+
+// Delete marks the current entry for deletion.
+// The entry will be removed from the map.
+//
+//go:nosplit
+func (e *FlatMapEntry[K, V]) Delete() {
+	e.entry.Value = *new(V)
+	e.op = deleteOp
 }
 
 // Compute performs a compute-style, atomic update for the given key.
@@ -318,7 +328,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 //
 // Callback signature:
 //
-//		fn(e *FlatMapIter[K, V])
+//		fn(e *FlatMapEntry[K, V])
 //
 //	  - Use e.Loaded() and e.Value() to inspect the current state
 //	  - Use e.Update(newV) to upsert; Use e.Delete() to remove
@@ -333,7 +343,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 //   - loaded: true if the key existed before the operation
 func (m *FlatMap[K, V]) Compute(
 	key K,
-	fn func(e *FlatMapIter[K, V]),
+	fn func(e *FlatMapEntry[K, V]),
 ) (actual V, loaded bool) {
 	for {
 		table := m.tableSeq.Read(&m.table)
@@ -375,7 +385,7 @@ func (m *FlatMap[K, V]) Compute(
 			oldB     *flatBucket[K, V]
 			oldIdx   int
 			oldMeta  uint64
-			it       FlatMapIter[K, V]
+			it       FlatMapEntry[K, V]
 			emptyB   *flatBucket[K, V]
 			emptyIdx int
 			lastB    *flatBucket[K, V]
@@ -387,7 +397,7 @@ func (m *FlatMap[K, V]) Compute(
 			for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				e := b.At(j).Ptr()
-				if EmbeddedHash {
+				if EmbeddedHash_ {
 					if e.GetHash() == hash && e.Key == key {
 						oldB, oldIdx, oldMeta, it.entry, it.loaded = b, j, meta, *e, true
 						break findLoop
@@ -408,7 +418,7 @@ func (m *FlatMap[K, V]) Compute(
 			lastB = b
 		}
 
-		fn(&it)
+		fn(noEscape(&it))
 		actual = it.Value()
 		loaded = it.Loaded()
 		switch it.op {
@@ -420,7 +430,7 @@ func (m *FlatMap[K, V]) Compute(
 				return
 			}
 			it.entry.Key = key
-			if EmbeddedHash {
+			if EmbeddedHash_ {
 				it.entry.SetHash(hash)
 			}
 			// insert new
@@ -438,7 +448,7 @@ func (m *FlatMap[K, V]) Compute(
 			// append new bucket
 			bucket := &flatBucket[K, V]{
 				meta: setByte(emptyMeta, h2v, 0),
-				entries: [entriesPerBucket]seqlockSlot[FlatEntry[K, V]]{
+				entries: [entriesPerBucket]seqlockSlot[FlatEntry_[K, V]]{
 					{buf: it.entry},
 				},
 			}
@@ -462,7 +472,7 @@ func (m *FlatMap[K, V]) Compute(
 				return
 			}
 			oldB.seq.BeginWriteLocked()
-			oldB.At(oldIdx).WriteUnfenced(FlatEntry[K, V]{})
+			oldB.At(oldIdx).WriteUnfenced(FlatEntry_[K, V]{})
 			newMeta := setByte(oldMeta, emptySlot, oldIdx)
 			atomic.StoreUint64(&oldB.meta, newMeta)
 			oldB.seq.EndWriteLocked()
@@ -488,103 +498,48 @@ func (m *FlatMap[K, V]) Compute(
 	}
 }
 
-// Store sets the value for a key.
-func (m *FlatMap[K, V]) Store(key K, value V) {
-	m.Compute(key, func(e *FlatMapIter[K, V]) {
-		e.Update(value)
-	})
-}
-
-// Swap stores value for key and returns the previous value if any.
-// The loaded result reports whether the key was present.
-func (m *FlatMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
-	_, loaded = m.Compute(key, func(e *FlatMapIter[K, V]) {
-		previous = e.Value()
-		e.Update(value)
-	})
-	return
-}
-
-// LoadOrStore returns the existing value for the key if present.
-// Otherwise, it stores and returns the given value.
-// The loaded result is true if the value was loaded, false if stored.
-func (m *FlatMap[K, V]) LoadOrStore(
-	key K,
-	value V,
-) (actual V, loaded bool) {
-	if v, ok := m.Load(key); ok {
-		return v, true
-	}
-	return m.Compute(key, func(e *FlatMapIter[K, V]) {
-		if e.Loaded() {
-			return
-		}
-		e.Update(value)
-	})
-}
-
-// LoadOrStoreFn loads the value for a key if present.
-// Otherwise, it stores and returns the value returned by valueFn.
-// The loaded result is true if the value was loaded, false if stored.
-func (m *FlatMap[K, V]) LoadOrStoreFn(
-	key K,
-	valueFn func() V,
-) (actual V, loaded bool) {
-	if v, ok := m.Load(key); ok {
-		return v, true
-	}
-	return m.Compute(key, func(e *FlatMapIter[K, V]) {
-		if e.Loaded() {
-			return
-		}
-		e.Update(valueFn())
-	})
-}
-
-// Delete deletes the value for a key.
-func (m *FlatMap[K, V]) Delete(key K) {
-	m.Compute(key, func(e *FlatMapIter[K, V]) {
-		e.Delete()
-	})
-}
-
-// LoadAndDelete deletes the value for a key, returning the previous value.
-// The loaded result reports whether the key was present.
-func (m *FlatMap[K, V]) LoadAndDelete(key K) (previous V, loaded bool) {
-	_, loaded = m.Compute(key, func(e *FlatMapIter[K, V]) {
-		if e.Loaded() {
-			previous = e.Value()
-			e.Delete()
-		}
-	})
-	return
-}
-
-// LoadAndUpdate updates the value for key if it exists, returning the previous
-// value. The loaded result reports whether the key was present.
-func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
-	_, loaded = m.Compute(key, func(e *FlatMapIter[K, V]) {
-		if e.Loaded() {
-			previous = e.Value()
-			e.Update(value)
-		}
-	})
-	return
-}
-
-// Clear clears all key-value pairs from the map.
-func (m *FlatMap[K, V]) Clear() {
+// Range iterates all entries using per-bucket seqlock reads.
+//
+//   - Copies a consistent snapshot from each bucket when the sequence is
+//     stable; otherwise briefly spins and retries.
+//   - Yields outside of locks to minimize contention.
+//   - Returning false from the callback stops iteration early.
+func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 	table := m.tableSeq.Read(&m.table)
 	if table.buckets.ptr == nil {
 		return
 	}
 
-	m.rebuild(mapRebuildBlockWritersHint, func() {
-		var newTable flatTable[K, V]
-		cpus := runtime.GOMAXPROCS(0)
-		newTable.makeTable(minTableLen, cpus)
-		m.tableSeq.WriteLocked(&m.table, newTable)
-	})
+	var meta uint64
+	var cache [entriesPerBucket]FlatEntry_[K, V]
+	var cacheCount int
+	for i := 0; i <= table.mask; i++ {
+		root := table.buckets.At(i)
+		for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
+			var spins int
+			for {
+				if s1, ok := b.seq.BeginRead(); ok {
+					meta = atomic.LoadUint64(&b.meta)
+					cacheCount = 0
+					for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+						j := firstMarkedByteIndex(marked)
+						cache[cacheCount] = b.At(j).ReadUnfenced()
+						cacheCount++
+					}
+					if b.seq.EndRead(s1) {
+						for j := range cacheCount {
+							kv := &cache[j]
+							if !yield(kv.Key, kv.Value) {
+								return
+							}
+						}
+						break
+					}
+				}
+				delay(&spins)
+			}
+		}
+	}
 }
 
 // All returns an iterator function for use with range-over-func.
@@ -595,14 +550,92 @@ func (m *FlatMap[K, V]) All() func(yield func(K, V) bool) {
 	return m.Range
 }
 
-// ComputeIter returns an iterator function for use with range-over-func.
+// ComputeRange iterates all entries and applies a user callback.
+//
+// Callback signature:
+//
+//		fn(e *FlatMapEntry[K, V]) bool
+//
+//	  - e.Update(newV): update the entry to newV
+//	  - e.Delete(): delete the entry
+//	  - default (no op): keep the entry unchanged
+//	  - return true to continue; return false to stop iteration immediately
+//	    (the entry passed to the final callback is not modified when stopping)
+//
+// Concurrency & consistency:
+//   - Cooperates with concurrent grow/shrink; if a resize is detected, it
+//     helps complete copying, then continues on the latest table.
+//   - Holds the root-bucket lock while processing its bucket chain to
+//     coordinate with writers/resize operations.
+//   - Uses per-bucket seqlock to minimize write windows and preserve reader
+//     consistency.
+//
+// Parameters:
+//   - fn: user function applied to each key-value pair.
+//   - blockWriters: optional flag (default false). If true, concurrent writers
+//     are blocked during iteration; resize operations are always exclusive.
+//
+// Recommendation: keep fn lightweight to reduce lock hold time.
+func (m *FlatMap[K, V]) ComputeRange(
+	fn func(e *FlatMapEntry[K, V]) bool,
+	blockWriters ...bool,
+) {
+	hint := mapRebuildAllowWritersHint
+	if len(blockWriters) != 0 && blockWriters[0] {
+		hint = mapRebuildBlockWritersHint
+	}
+
+	m.rebuild(hint, func() {
+		table := m.tableSeq.Read(&m.table)
+		if table.buckets.ptr == nil {
+			return
+		}
+		it := FlatMapEntry[K, V]{
+			loaded: true,
+		}
+		for i := 0; i <= table.mask; i++ {
+			root := table.buckets.At(i)
+			root.Lock()
+			for b := root; b != nil; b = (*flatBucket[K, V])(b.next) {
+				meta := LoadIntFast(&b.meta)
+				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+					j := firstMarkedByteIndex(marked)
+					e := b.At(j)
+					it.entry = *e.Ptr()
+					it.op = cancelOp
+					shouldContinue := fn(noEscape(&it))
+					switch it.op {
+					case updateOp:
+						b.seq.WriteLocked(e, it.entry)
+					case deleteOp:
+						b.seq.BeginWriteLocked()
+						e.WriteUnfenced(FlatEntry_[K, V]{})
+						meta = setByte(meta, emptySlot, j)
+						atomic.StoreUint64(&b.meta, meta)
+						b.seq.EndWriteLocked()
+						table.AddSize(i, -1)
+					default:
+						// cancelOp: No-op
+					}
+					if !shouldContinue {
+						root.Unlock()
+						return
+					}
+				}
+			}
+			root.Unlock()
+		}
+	})
+}
+
+// Entries returns an iterator function for use with range-over-func.
 // It provides the same functionality as ComputeRange but in iterator form.
 //
 //go:nosplit
-func (m *FlatMap[K, V]) ComputeIter(
+func (m *FlatMap[K, V]) Entries(
 	blockWriters ...bool,
-) func(yield func(e *FlatMapIter[K, V]) bool) {
-	return func(yield func(e *FlatMapIter[K, V]) bool) {
+) func(yield func(e *FlatMapEntry[K, V]) bool) {
+	return func(yield func(e *FlatMapEntry[K, V]) bool) {
 		m.ComputeRange(yield, blockWriters...)
 	}
 }
@@ -632,6 +665,21 @@ func (m *FlatMap[K, V]) IsZero() bool {
 	}
 
 	return !table.SumSizeExceeds(0)
+}
+
+// Clear clears all key-value pairs from the map.
+func (m *FlatMap[K, V]) Clear() {
+	table := m.tableSeq.Read(&m.table)
+	if table.buckets.ptr == nil {
+		return
+	}
+
+	m.rebuild(mapRebuildBlockWritersHint, func() {
+		var newTable flatTable[K, V]
+		cpus := runtime.GOMAXPROCS(0)
+		newTable.makeTable(minTableLen, cpus)
+		m.tableSeq.WriteLocked(&m.table, newTable)
+	})
 }
 
 func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, V], bool) {
@@ -786,7 +834,7 @@ func (m *FlatMap[K, V]) copyBucket(
 			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				e := b.At(j).Ptr()
-				if EmbeddedHash {
+				if EmbeddedHash_ {
 					hash = e.GetHash()
 				} else {
 					hash = m.keyHash(noescape(unsafe.Pointer(&e.Key)), m.seed)
@@ -807,7 +855,7 @@ func (m *FlatMap[K, V]) copyBucket(
 						StoreIntFast(&b.meta, setByte(meta, h2v, emptyIdx))
 						entry := b.At(emptyIdx).Ptr()
 						entry.Value = e.Value
-						if EmbeddedHash {
+						if EmbeddedHash_ {
 							entry.SetHash(hash)
 						}
 						entry.Key = e.Key
@@ -815,13 +863,13 @@ func (m *FlatMap[K, V]) copyBucket(
 					}
 					next := (*flatBucket[K, V])(b.next)
 					if next == nil {
-						newE := FlatEntry[K, V]{Key: e.Key, Value: e.Value}
-						if EmbeddedHash {
+						newE := FlatEntry_[K, V]{Key: e.Key, Value: e.Value}
+						if EmbeddedHash_ {
 							newE.SetHash(hash)
 						}
 						bucket := &flatBucket[K, V]{
 							meta: setByte(emptyMeta, h2v, 0),
-							entries: [entriesPerBucket]seqlockSlot[FlatEntry[K, V]]{
+							entries: [entriesPerBucket]seqlockSlot[FlatEntry_[K, V]]{
 								{buf: newE},
 							},
 						}
@@ -852,7 +900,7 @@ func (t *flatTable[K, V]) makeTable(
 	// if sizeLen <= 1 {
 	// 	t.size.ptr = unsafe.Pointer(&t.smallSz)
 	// } else {
-	t.size = makeUnsafeSlice(make([]CounterStripe, sizeLen))
+	t.size = makeUnsafeSlice(make([]CounterStripe_, sizeLen))
 	// }
 	t.sizeMask = uint32(sizeLen - 1)
 }
@@ -884,10 +932,10 @@ func (t *flatTable[K, V]) SumSizeExceeds(limit int) bool {
 }
 
 //go:nosplit
-func (b *flatBucket[K, V]) At(i int) *seqlockSlot[FlatEntry[K, V]] {
-	return (*seqlockSlot[FlatEntry[K, V]])(unsafe.Add(
+func (b *flatBucket[K, V]) At(i int) *seqlockSlot[FlatEntry_[K, V]] {
+	return (*seqlockSlot[FlatEntry_[K, V]])(unsafe.Add(
 		unsafe.Pointer(&b.entries),
-		uintptr(i)*unsafe.Sizeof(seqlockSlot[FlatEntry[K, V]]{}),
+		uintptr(i)*unsafe.Sizeof(seqlockSlot[FlatEntry_[K, V]]{}),
 	))
 }
 
@@ -924,52 +972,4 @@ func (b *flatBucket[K, V]) tryLock() bool {
 //go:nosplit
 func (b *flatBucket[K, V]) Unlock() {
 	atomic.StoreUint64(&b.meta, LoadIntFast(&b.meta)&^opLockMask)
-}
-
-// FlatMapIter represents an entry being processed in Compute/ComputeRange operations.
-// It provides methods to update or delete the entry during iteration.
-type FlatMapIter[K comparable, V any] struct {
-	entry  FlatEntry[K, V]
-	loaded bool
-	op     computeOp
-}
-
-// Key returns the key of the current entry.
-//
-//go:nosplit
-func (e *FlatMapIter[K, V]) Key() K {
-	return e.entry.Key
-}
-
-// Value returns the value of the current entry.
-//
-//go:nosplit
-func (e *FlatMapIter[K, V]) Value() V {
-	return e.entry.Value
-}
-
-// Loaded returns true if the entry is loaded, false otherwise.
-//
-//go:nosplit
-func (e *FlatMapIter[K, V]) Loaded() bool {
-	return e.loaded
-}
-
-// Update performs an upsert on the current entry.
-// If Loaded()==true, replaces the value;
-// if false, inserts the key with newValue.
-//
-//go:nosplit
-func (e *FlatMapIter[K, V]) Update(newValue V) {
-	e.entry.Value = newValue
-	e.op = updateOp
-}
-
-// Delete marks the current entry for deletion.
-// The entry will be removed from the map.
-//
-//go:nosplit
-func (e *FlatMapIter[K, V]) Delete() {
-	e.entry.Value = *new(V)
-	e.op = deleteOp
 }

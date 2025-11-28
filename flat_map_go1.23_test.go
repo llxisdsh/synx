@@ -298,7 +298,7 @@ func TestFlatMap_All_Compatibility(t *testing.T) {
 	}
 }
 
-// TestFlatMap_ComputeAll_UpdateDelete verifies ComputeIter iteration can update and delete entries.
+// TestFlatMap_ComputeAll_UpdateDelete verifies Entries iteration can update and delete entries.
 func TestFlatMap_ComputeAll_UpdateDelete(t *testing.T) {
 	m := NewFlatMap[int, int]()
 	const N = 128
@@ -307,7 +307,7 @@ func TestFlatMap_ComputeAll_UpdateDelete(t *testing.T) {
 		m.Store(i, i)
 	}
 
-	for it := range m.ComputeIter() {
+	for it := range m.Entries() {
 		if it.Key()%2 == 0 {
 			it.Update(it.Value() + 1)
 		} else {
@@ -338,7 +338,7 @@ func TestFlatMap_ComputeAll_EarlyStop(t *testing.T) {
 	}
 
 	processed := 0
-	for it := range m.ComputeIter() {
+	for it := range m.Entries() {
 		it.Update(it.Value() + 1000)
 		processed++
 		if processed == 10 {

@@ -2,7 +2,7 @@
 
 package opt
 
-// CounterStripe represents a striped counter to reduce contention.
-type CounterStripe struct {
+// CounterStripe_ represents a striped counter to reduce contention.
+type CounterStripe_ struct {
 	C uintptr // Counter value, accessed atomically
 }

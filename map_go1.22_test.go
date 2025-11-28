@@ -53,17 +53,12 @@ func init() {
 	}
 }
 
-type structKey struct {
-	Service  uint32
-	Instance uint64
-}
-
 func TestMap_BucketOfStructSize(t *testing.T) {
 	t.Logf("CacheLineSize : %d", cacheLineSize)
 	t.Logf("entriesPerBucket : %d", entriesPerBucket)
 
-	size := unsafe.Sizeof(CounterStripe{})
-	t.Log("CounterStripe size:", size)
+	size := unsafe.Sizeof(CounterStripe_{})
+	t.Log("CounterStripe_ size:", size)
 
 	size = unsafe.Sizeof(bucket{})
 	t.Log("bucket size:", size)
@@ -145,7 +140,7 @@ func TestMap_InterfaceKey(t *testing.T) {
 func TestMap_Compute_Basic(t *testing.T) {
 	m := NewMap[string, int]()
 
-	ret, loaded := m.Compute("k1", func(e *MapIter[string, int]) {
+	ret, loaded := m.Compute("k1", func(e *MapEntry[string, int]) {
 		e.Update(5)
 	})
 	if loaded || ret != 5 {
@@ -156,7 +151,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k2", 1)
-	ret, loaded = m.Compute("k2", func(e *MapIter[string, int]) {
+	ret, loaded = m.Compute("k2", func(e *MapEntry[string, int]) {
 		e.Update(e.Value() + 1)
 	})
 	if !loaded || ret != 2 {
@@ -167,7 +162,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k3", 10)
-	ret, loaded = m.Compute("k3", func(e *MapIter[string, int]) {
+	ret, loaded = m.Compute("k3", func(e *MapEntry[string, int]) {
 		e.Delete()
 	})
 	if !loaded || ret != 0 {
@@ -178,7 +173,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k4", 7)
-	ret, loaded = m.Compute("k4", func(e *MapIter[string, int]) {
+	ret, loaded = m.Compute("k4", func(e *MapEntry[string, int]) {
 	})
 	if !loaded || ret != 7 {
 		t.Fatalf("Compute cancel ret=%d ok=%v", ret, loaded)
@@ -211,7 +206,7 @@ func TestMap_ComputeRange_UpdateDeleteCancel(t *testing.T) {
 	m.Store("b", 2)
 	m.Store("c", 3)
 
-	m.ComputeRange(func(e *MapIter[string, int]) bool {
+	m.ComputeRange(func(e *MapEntry[string, int]) bool {
 		if e.Key() == "c" {
 			e.Delete()
 			return true
@@ -4502,15 +4497,15 @@ func TestMapClone(t *testing.T) {
 	})
 }
 
-// TestMapRangeProcessEntry tests the computeRangeEntries function of Map
+// TestMapRangeProcessEntry tests the computeRangeEntry function of Map
 func TestMapRangeProcessEntry(t *testing.T) {
 	// Test with empty map
 	t.Run("EmptyMap", func(t *testing.T) {
 		m := NewMap[string, int]()
 		processCount := 0
 
-		m.computeRangeEntries(
-			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
+		m.computeRangeEntry(
+			func(loaded *Entry_[string, int]) (*Entry_[string, int], bool) {
 				processCount++
 				return loaded, true // No modification
 			},
@@ -4533,11 +4528,11 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		processCount := 0
-		m.computeRangeEntries(
-			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
+		m.computeRangeEntry(
+			func(loaded *Entry_[string, int]) (*Entry_[string, int], bool) {
 				processCount++
 				// Double all values
-				return &mapEntry[string, int]{
+				return &Entry_[string, int]{
 					Key:   loaded.Key,
 					Value: loaded.Value * 2,
 				}, true
@@ -4569,8 +4564,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		// Delete even-numbered entries
-		m.computeRangeEntries(
-			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
+		m.computeRangeEntry(
+			func(loaded *Entry_[string, int]) (*Entry_[string, int], bool) {
 				if loaded.Value%2 == 0 {
 					return nil, true // Delete entry
 				}
@@ -4608,8 +4603,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 			m.Store(strconv.Itoa(i), i)
 		}
 
-		m.computeRangeEntries(
-			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
+		m.computeRangeEntry(
+			func(loaded *Entry_[string, int]) (*Entry_[string, int], bool) {
 				value := loaded.Value
 				switch {
 				case value%3 == 0:
@@ -4617,7 +4612,7 @@ func TestMapRangeProcessEntry(t *testing.T) {
 					return nil, true // Delete entry
 				case value%3 == 1:
 					// Remainder 1: multiply by 10
-					return &mapEntry[string, int]{
+					return &Entry_[string, int]{
 						Key:   loaded.Key,
 						Value: value * 10,
 					}, true
@@ -4654,8 +4649,8 @@ func TestMapRangeProcessEntry(t *testing.T) {
 		}
 
 		// This should not panic or cause data races
-		m.computeRangeEntries(
-			func(loaded *mapEntry[string, int]) (*mapEntry[string, int], bool) {
+		m.computeRangeEntry(
+			func(loaded *Entry_[string, int]) (*Entry_[string, int], bool) {
 				// Just return the same entry
 				return loaded, true
 			},
@@ -5670,104 +5665,6 @@ func TestMapCompareAndDelete(t *testing.T) {
 	})
 }
 
-func TestMap_LoadEntry(t *testing.T) {
-	m := NewMap[string, int]()
-
-	// Test loading from empty map
-	entry := m.loadEntry("key1")
-	if entry != nil {
-		t.Errorf("Expected nil for non-existent key, got %v", entry)
-	}
-
-	// Verify Load also returns false for empty map
-	value, ok := m.Load("key1")
-	if ok {
-		t.Errorf(
-			"Expected Load to return false for non-existent key, got true with value %v",
-			value,
-		)
-	}
-
-	// Store a value
-	m.Store("key1", 100)
-
-	// Test loadEntry and Load consistency for existing key
-	entry = m.loadEntry("key1")
-	if entry == nil {
-		t.Fatal("Expected entry for existing key, got nil")
-	}
-	if entry.Key != "key1" {
-		t.Errorf("Expected key 'key1', got %v", entry.Key)
-	}
-	if entry.Value != 100 {
-		t.Errorf("Expected value 100, got %v", entry.Value)
-	}
-
-	// Verify Load returns the same value
-	value, ok = m.Load("key1")
-	if !ok {
-		t.Error("Expected Load to return true for existing key")
-	}
-	if value != 100 {
-		t.Errorf("Expected Load value 100, got %v", value)
-	}
-	if entry.Value != value {
-		t.Errorf(
-			"loadEntry and Load returned different values: %v vs %v",
-			entry.Value,
-			value,
-		)
-	}
-
-	// Test non-existent key with both functions
-	entry = m.loadEntry("key2")
-	value, ok = m.Load("key2")
-	if entry != nil {
-		t.Errorf(
-			"Expected loadEntry to return nil for non-existent key, got %v",
-			entry,
-		)
-	}
-	if ok {
-		t.Errorf(
-			"Expected Load to return false for non-existent key, got true with value %v",
-			value,
-		)
-	}
-
-	// Store multiple values and test consistency
-	m.Store("key2", 200)
-	m.Store("key3", 300)
-
-	// Test key2
-	entry = m.loadEntry("key2")
-	value, ok = m.Load("key2")
-	if entry == nil || !ok {
-		t.Error("Both loadEntry and Load should find key2")
-	}
-	if entry != nil && entry.Value != value {
-		t.Errorf(
-			"loadEntry and Load returned different values for key2: %v vs %v",
-			entry.Value,
-			value,
-		)
-	}
-
-	// Test key3
-	entry = m.loadEntry("key3")
-	value, ok = m.Load("key3")
-	if entry == nil || !ok {
-		t.Error("Both loadEntry and Load should find key3")
-	}
-	if entry != nil && entry.Value != value {
-		t.Errorf(
-			"loadEntry and Load returned different values for key3: %v vs %v",
-			entry.Value,
-			value,
-		)
-	}
-}
-
 // TestMap_InitWithOptions tests the withOptions function
 func TestMap_InitWithOptions(t *testing.T) {
 	t.Run("BasicInitialization", func(t *testing.T) {
@@ -6088,13 +5985,13 @@ func TestMap_EmbeddedHash(t *testing.T) {
 	// These functions are no-ops when synx_embedded_hash build tag is not set
 	// But we still need to call them to get coverage
 
-	t.Run("mapEntry", func(t *testing.T) {
-		var entry mapEntry[string, int]
+	t.Run("Entry_", func(t *testing.T) {
+		var entry Entry_[string, int]
 
 		// Test getHash - should return 0
 		hash := entry.GetHash()
 		if hash != 0 {
-			t.Errorf("mapEntry.getHash() = %d, want 0", hash)
+			t.Errorf("Entry_.getHash() = %d, want 0", hash)
 		}
 
 		// Test setHash - should be a no-op
@@ -6102,13 +5999,13 @@ func TestMap_EmbeddedHash(t *testing.T) {
 		// Verify it's still 0 since setHash is a no-op
 		hash = entry.GetHash()
 		//goland:noinspection ALL
-		if EmbeddedHash {
+		if EmbeddedHash_ {
 			if hash != 0x12345678 {
-				t.Errorf("After setHash, mapEntry.getHash() = %d, want 0x12345678", hash)
+				t.Errorf("After setHash, Entry_.getHash() = %d, want 0x12345678", hash)
 			}
 		} else {
 			if hash != 0 {
-				t.Errorf("After setHash, mapEntry.getHash() = %d, want 0", hash)
+				t.Errorf("After setHash, Entry_.getHash() = %d, want 0", hash)
 			}
 		}
 	})
@@ -6517,7 +6414,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.computeRangeEntries(func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], bool) {
+				m.computeRangeEntry(func(loaded *Entry_[int, testValue]) (*Entry_[int, testValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					// Verify invariant during processing
 					if v.Y != ^v.X {
@@ -6530,7 +6427,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 						Y:       v.Y,
 						Counter: v.Counter + 1,
 					}
-					return &mapEntry[int, testValue]{Value: newV}, true
+					return &Entry_[int, testValue]{Value: newV}, true
 				}, true) // policyOpt = BlockWriters
 				rangeProcessRuns.Add(1)
 				runtime.Gosched()
@@ -6551,21 +6448,21 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 				default:
 					key := rand.IntN(N)
 					startTime := time.Now()
-					m.computeEntry(key, func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], testValue, bool) {
-						if loaded == nil {
-							return loaded, testValue{}, false
+					m.Compute(key, func(e *MapEntry[int, testValue]) {
+						if !e.Loaded() {
+							return
 						}
 						// Check if we were blocked for a significant time
 						if time.Since(startTime) > 10*time.Millisecond {
 							blockedWrites.Add(1)
 						}
 						// Maintain invariant while updating
-						newV := testValue{
-							X:       loaded.Value.X + uint64(writerID),
-							Y:       ^(loaded.Value.X + uint64(writerID)),
-							Counter: loaded.Value.Counter,
-						}
-						return &mapEntry[int, testValue]{Value: newV}, newV, true
+
+						e.Update(testValue{
+							X:       e.Value().X + uint64(writerID),
+							Y:       ^(e.Value().X + uint64(writerID)),
+							Counter: e.Value().Counter,
+						})
 					})
 					runtime.Gosched()
 				}
@@ -6655,7 +6552,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.computeRangeEntries(func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], bool) {
+				m.computeRangeEntry(func(loaded *Entry_[int, testValue]) (*Entry_[int, testValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					// Verify invariant
 					if v.B != ^v.A {
@@ -6668,7 +6565,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 						B:   v.B,
 						Seq: v.Seq + 1,
 					}
-					return &mapEntry[int, testValue]{Value: newV}, true
+					return &Entry_[int, testValue]{Value: newV}, true
 				}, false) // policyOpt = AllowWriters
 				rangeProcessRuns.Add(1)
 				runtime.Gosched()
@@ -6688,19 +6585,18 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.computeEntry(key, func(loaded *mapEntry[int, testValue]) (*mapEntry[int, testValue], testValue, bool) {
-						if loaded == nil {
-							return loaded, testValue{}, false
+					m.Compute(key, func(e *MapEntry[int, testValue]) {
+						if !e.Loaded() {
+							return
 						}
 						concurrentWrites.Add(1)
 						// Update while maintaining invariant
-						newA := loaded.Value.A + uint64(writerID*1000)
-						newV := testValue{
+						newA := e.Value().A + uint64(writerID*1000)
+						e.Update(testValue{
 							A:   newA,
 							B:   ^newA,
-							Seq: loaded.Value.Seq,
-						}
-						return &mapEntry[int, testValue]{Value: newV}, newV, true
+							Seq: e.Value().Seq,
+						})
 					})
 					runtime.Gosched()
 				}
@@ -6810,7 +6706,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				m.computeRangeEntries(func(loaded *mapEntry[int, complexValue]) (*mapEntry[int, complexValue], bool) {
+				m.computeRangeEntry(func(loaded *Entry_[int, complexValue]) (*Entry_[int, complexValue], bool) {
 					k, v := loaded.Key, loaded.Value
 					validateValue(k, v, "ComputeRange")
 
@@ -6822,7 +6718,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 						Data:     [4]uint64{newID, newID + 1, newID + 2, newID + 3},
 						Tail:     newID,
 					}
-					return &mapEntry[int, complexValue]{Value: newV}, true
+					return &Entry_[int, complexValue]{Value: newV}, true
 				}, true) // policyOpt = BlockWriters
 				runtime.Gosched()
 			}
@@ -6884,20 +6780,19 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.computeEntry(key, func(loaded *mapEntry[int, complexValue]) (*mapEntry[int, complexValue], complexValue, bool) {
-						if loaded == nil {
-							return loaded, complexValue{}, false
+					m.Compute(key, func(e *MapEntry[int, complexValue]) {
+						if !e.Loaded() {
+							return
 						}
 
 						// Create new value maintaining invariants
-						newID := loaded.Value.ID + uint64(writerID*0x10000)
-						newV := complexValue{
+						newID := e.Value().ID + uint64(writerID*0x10000)
+						e.Update(complexValue{
 							ID:       newID,
 							Checksum: ^newID,
 							Data:     [4]uint64{newID, newID + 1, newID + 2, newID + 3},
 							Tail:     newID,
-						}
-						return &mapEntry[int, complexValue]{Value: newV}, newV, true
+						})
 					})
 					runtime.Gosched()
 				}
@@ -6947,10 +6842,10 @@ func TestMap_RangeProcess_WriterBlocking_Verification(t *testing.T) {
 		defer wg.Done()
 		close(rangeProcessStarted)
 
-		m.computeRangeEntries(func(loaded *mapEntry[int, int]) (*mapEntry[int, int], bool) {
+		m.computeRangeEntry(func(loaded *Entry_[int, int]) (*Entry_[int, int], bool) {
 			// Simulate some processing time
 			time.Sleep(10 * time.Millisecond)
-			return &mapEntry[int, int]{Value: loaded.Value + 1}, true
+			return &Entry_[int, int]{Value: loaded.Value + 1}, true
 		}, true) // policyOpt = BlockWriters
 
 		close(rangeProcessDone)

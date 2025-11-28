@@ -7,9 +7,9 @@ import (
 	"unsafe"
 )
 
-// IsTSO under race detector, disable TSO optimizations and use conservative
+// IsTSO_ under race detector, disable TSO optimizations and use conservative
 // atomic loads/stores
-const IsTSO = false
+const IsTSO_ = false
 
 // LoadPtr conservative: atomic pointer load to satisfy race detector
 //
