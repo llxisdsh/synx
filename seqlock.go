@@ -257,56 +257,6 @@ func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 // alignment and size permit; otherwise falls back to a typed copy.
 // Must be called under a lock or within a seqlock-stable window.
 func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
-	if IsTSO_ {
-		slot.buf = v
-		return
-	}
-
-	if unsafe.Sizeof(slot.buf) == 0 {
-		return
-	}
-
-	ws := unsafe.Sizeof(uintptr(0))
-	sz := unsafe.Sizeof(slot.buf)
-	al := unsafe.Alignof(slot.buf)
-	if al >= ws && sz%ws == 0 {
-		n := sz / ws
-		switch n {
-		case 1:
-			u := *(*uintptr)(unsafe.Pointer(&v))
-			atomic.StoreUintptr((*uintptr)(unsafe.Pointer(&slot.buf)), u)
-		case 2:
-			p := (*[2]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[2]uintptr)(unsafe.Pointer(&v))
-			atomic.StoreUintptr(&p[0], q[0])
-			atomic.StoreUintptr(&p[1], q[1])
-		case 3:
-			p := (*[3]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[3]uintptr)(unsafe.Pointer(&v))
-			atomic.StoreUintptr(&p[0], q[0])
-			atomic.StoreUintptr(&p[1], q[1])
-			atomic.StoreUintptr(&p[2], q[2])
-		case 4:
-			p := (*[4]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[4]uintptr)(unsafe.Pointer(&v))
-			atomic.StoreUintptr(&p[0], q[0])
-			atomic.StoreUintptr(&p[1], q[1])
-			atomic.StoreUintptr(&p[2], q[2])
-			atomic.StoreUintptr(&p[3], q[3])
-		default:
-			for i := range n {
-				off := i * ws
-				src := (*uintptr)(unsafe.Pointer(
-					uintptr(unsafe.Pointer(&v)) + off,
-				))
-				dst := (*uintptr)(unsafe.Pointer(
-					uintptr(unsafe.Pointer(&slot.buf)) + off,
-				))
-				atomic.StoreUintptr(dst, *src)
-			}
-		}
-		return
-	}
 	slot.buf = v
 }
 
