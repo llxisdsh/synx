@@ -210,7 +210,7 @@ func (m *Map[K, V]) Load(key K) (value V, ok bool) {
 	}
 
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
-	if e := m.loadEntry(table, hash, &key); e != nil {
+	if e := m.loadEntry_(table, hash, &key); e != nil {
 		return e.Value, true
 	}
 	return *new(V), false
@@ -227,12 +227,12 @@ func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		if e := m.loadEntry(table, hash, &key); e != nil {
+		if e := m.loadEntry_(table, hash, &key); e != nil {
 			return e.Value, true
 		}
 	}
 
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			if e != nil {
 				return e, e.Value, true
@@ -264,12 +264,12 @@ func (m *Map[K, V]) LoadOrStoreFn(
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		if e := m.loadEntry(table, hash, &key); e != nil {
+		if e := m.loadEntry_(table, hash, &key); e != nil {
 			return e.Value, true
 		}
 	}
 
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			if e != nil {
 				return e, e.Value, true
@@ -301,7 +301,7 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		e := m.loadEntry(table, hash, &key)
+		e := m.loadEntry_(table, hash, &key)
 		if e == nil {
 			return *new(V), false
 		}
@@ -317,7 +317,7 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 		}
 	}
 
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			if e != nil {
 				return &Entry_[K, V]{Value: value}, e.Value, true
@@ -338,13 +338,13 @@ func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		e := m.loadEntry(table, hash, &key)
+		e := m.loadEntry_(table, hash, &key)
 		if e == nil {
 			return *new(V), false
 		}
 	}
 
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			if e != nil {
 				return nil, e.Value, true
@@ -366,7 +366,7 @@ func (m *Map[K, V]) Store(key K, value V) {
 	if enableFastPath {
 		// deduplicates identical values
 		if m.valEqual != nil {
-			if e := m.loadEntry(table, hash, &key); e != nil {
+			if e := m.loadEntry_(table, hash, &key); e != nil {
 				if m.valEqual(
 					noescape(unsafe.Pointer(&e.Value)),
 					noescape(unsafe.Pointer(&value)),
@@ -377,7 +377,7 @@ func (m *Map[K, V]) Store(key K, value V) {
 		}
 	}
 
-	m.computeEntry(table, hash, &key,
+	m.computeEntry_(table, hash, &key,
 		func(*Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			return &Entry_[K, V]{Value: value}, *new(V), false
 		},
@@ -397,7 +397,7 @@ func (m *Map[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 	if enableFastPath {
 		// deduplicates identical values
 		if m.valEqual != nil {
-			if e := m.loadEntry(table, hash, &key); e != nil {
+			if e := m.loadEntry_(table, hash, &key); e != nil {
 				if m.valEqual(
 					noescape(unsafe.Pointer(&e.Value)),
 					noescape(unsafe.Pointer(&value)),
@@ -408,7 +408,7 @@ func (m *Map[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 		}
 	}
 
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			if e != nil {
 				return &Entry_[K, V]{Value: value}, e.Value, true
@@ -428,13 +428,13 @@ func (m *Map[K, V]) Delete(key K) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		e := m.loadEntry(table, hash, &key)
+		e := m.loadEntry_(table, hash, &key)
 		if e == nil {
 			return
 		}
 	}
 
-	m.computeEntry(table, hash, &key,
+	m.computeEntry_(table, hash, &key,
 		func(*Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			return nil, *new(V), false
 		},
@@ -456,7 +456,7 @@ func (m *Map[K, V]) CompareAndSwap(key K, old V, new V) (swapped bool) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		e := m.loadEntry(table, hash, &key)
+		e := m.loadEntry_(table, hash, &key)
 		if e == nil {
 			return false
 		}
@@ -476,7 +476,7 @@ func (m *Map[K, V]) CompareAndSwap(key K, old V, new V) (swapped bool) {
 		}
 	}
 
-	_, swapped = m.computeEntry(table, hash, &key,
+	_, swapped = m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			var zero V
 			if e != nil &&
@@ -507,7 +507,7 @@ func (m *Map[K, V]) CompareAndDelete(key K, old V) (deleted bool) {
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 
 	if enableFastPath {
-		e := m.loadEntry(table, hash, &key)
+		e := m.loadEntry_(table, hash, &key)
 		if e == nil {
 			return false
 		}
@@ -519,7 +519,7 @@ func (m *Map[K, V]) CompareAndDelete(key K, old V) (deleted bool) {
 		}
 	}
 
-	_, deleted = m.computeEntry(table, hash, &key,
+	_, deleted = m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			var zero V
 			if e != nil &&
@@ -566,7 +566,7 @@ func (m *Map[K, V]) Compute(
 		table = m.slowInit()
 	}
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
-	return m.computeEntry(table, hash, &key,
+	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
 			it := &Entry[K, V]{entry: Entry_[K, V]{Key: key}}
 			if e != nil {
@@ -590,7 +590,7 @@ func (m *Map[K, V]) Compute(
 //
 //go:nosplit
 func (m *Map[K, V]) Range(yield func(key K, value V) bool) {
-	m.rangeEntry(func(e *Entry_[K, V]) bool {
+	m.rangeEntry_(func(e *Entry_[K, V]) bool {
 		return yield(e.Key, e.Value)
 	})
 }
@@ -633,7 +633,7 @@ func (m *Map[K, V]) ComputeRange(
 	blockWriters ...bool,
 ) {
 	it := &Entry[K, V]{loaded: true}
-	m.computeRangeEntry(func(e *Entry_[K, V]) (*Entry_[K, V], bool) {
+	m.computeRangeEntry_(func(e *Entry_[K, V]) (*Entry_[K, V], bool) {
 		it.entry = *e
 		it.op = cancelOp
 		shouldContinue := fn(noEscape(it))
@@ -800,7 +800,7 @@ func (m *Map[K, V]) ToMap(limit ...int) map[K]V {
 	}
 
 	a := make(map[K]V, min(m.Size(), l))
-	m.rangeEntry(func(e *Entry_[K, V]) bool {
+	m.rangeEntry_(func(e *Entry_[K, V]) bool {
 		a[e.Key] = e.Value
 		l--
 		return l > 0
@@ -840,10 +840,10 @@ func (m *Map[K, V]) CloneTo(clone *Map[K, V]) {
 
 	// Pre-fetch size to optimize initial capacity
 	clone.Grow(m.Size())
-	m.rangeEntry(func(e *Entry_[K, V]) bool {
+	m.rangeEntry_(func(e *Entry_[K, V]) bool {
 		cloneTable := (*mapTable)(LoadPtr(&clone.table))
 		hash := m.keyHash(noescape(unsafe.Pointer(&e.Key)), m.seed)
-		clone.computeEntry(cloneTable, hash, &e.Key,
+		clone.computeEntry_(cloneTable, hash, &e.Key,
 			func(*Entry_[K, V]) (*Entry_[K, V], V, bool) {
 				return e, e.Value, false
 			},
@@ -853,7 +853,7 @@ func (m *Map[K, V]) CloneTo(clone *Map[K, V]) {
 }
 
 //go:nosplit
-func (m *Map[K, V]) loadEntry(
+func (m *Map[K, V]) loadEntry_(
 	table *mapTable,
 	hash uintptr,
 	key *K,
@@ -881,7 +881,7 @@ func (m *Map[K, V]) loadEntry(
 	return nil
 }
 
-// computeEntry processes a key-value pair using the provided function.
+// computeEntry_ processes a key-value pair using the provided function.
 //
 // This method is the foundation for all modification operations in Map.
 // It provides. Complete control over key-value pairs, allowing atomic reading,
@@ -915,7 +915,7 @@ func (m *Map[K, V]) loadEntry(
 //     Keep the execution time short to avoid blocking other operations.
 //   - Avoid calling other map methods inside fn to prevent deadlocks.
 //   - Do not perform expensive computations or I/O operations inside fn.
-func (m *Map[K, V]) computeEntry(
+func (m *Map[K, V]) computeEntry_(
 	table *mapTable,
 	hash uintptr,
 	key *K,
@@ -1099,7 +1099,7 @@ func (m *Map[K, V]) computeEntry(
 	}
 }
 
-// rangeEntry iterates over all entries in the map.
+// rangeEntry_ iterates over all entries in the map.
 //   - yield: callback that processes each entry and return a boolean
 //     to control iteration.
 //     Return true to continue iteration, false to stop early.
@@ -1111,7 +1111,7 @@ func (m *Map[K, V]) computeEntry(
 //     to be real-time but provides eventual consistency.
 //     In extreme cases, the same value may be traversed twice
 //     (if it gets deleted and re-added later during iteration).
-func (m *Map[K, V]) rangeEntry(yield func(e *Entry_[K, V]) bool) {
+func (m *Map[K, V]) rangeEntry_(yield func(e *Entry_[K, V]) bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
 		return
@@ -1131,7 +1131,7 @@ func (m *Map[K, V]) rangeEntry(yield func(e *Entry_[K, V]) bool) {
 	}
 }
 
-// computeRangeEntry iterates through all map entries while holding the
+// computeRangeEntry_ iterates through all map entries while holding the
 // bucket lock, applying fn to each entry. The iteration is thread-safe
 // due to bucket-level locking.
 //
@@ -1157,7 +1157,7 @@ func (m *Map[K, V]) rangeEntry(yield func(e *Entry_[K, V]) bool) {
 //     iterates the new table while blocking subsequent resize/rebuild.
 //   - Holds bucket lock for entire iteration - avoid long operations/deadlock
 //     risks
-func (m *Map[K, V]) computeRangeEntry(
+func (m *Map[K, V]) computeRangeEntry_(
 	fn func(e *Entry_[K, V]) (*Entry_[K, V], bool),
 	blockWriters ...bool,
 ) {

@@ -657,7 +657,7 @@ type mapStats struct {
 	EmptyBuckets int
 	// Capacity is the Map capacity, i.e., the total number of
 	// entries that all buckets can physically hold. This number
-	// does not consider the loadEntry factor.
+	// does not consider the load factor.
 	Capacity int
 	// Size is the exact number of entries stored in the map.
 	Size int
