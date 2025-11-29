@@ -44,7 +44,7 @@ func (g *OnceGroup[K, V]) Do(
 	var c *call[V]
 	_, loaded := g.m.Compute(
 		key,
-		func(it *MapEntry[K, *call[V]]) {
+		func(it *Entry[K, *call[V]]) {
 			if it.Loaded() {
 				c = it.Value()
 				atomic.AddInt32(&c.dups, 1)
@@ -84,7 +84,7 @@ func (g *OnceGroup[K, V]) DoChan(
 	var c *call[V]
 	_, loaded := g.m.Compute(
 		key,
-		func(it *MapEntry[K, *call[V]]) {
+		func(it *Entry[K, *call[V]]) {
 			if it.Loaded() {
 				c = it.Value()
 				atomic.AddInt32(&c.dups, 1)
@@ -120,7 +120,7 @@ func (g *OnceGroup[K, V]) ForgetUnshared(key K) bool {
 	deleted := false
 	_, _ = g.m.Compute(
 		key,
-		func(it *MapEntry[K, *call[V]]) {
+		func(it *Entry[K, *call[V]]) {
 			if it.Loaded() && atomic.LoadInt32(&it.Value().dups) == 0 {
 				it.Delete()
 				deleted = true
@@ -152,7 +152,7 @@ func (g *OnceGroup[K, V]) doCall(
 		var chs []chan<- OnceGroupResult[V]
 		_, _ = g.m.Compute(
 			key,
-			func(it *MapEntry[K, *call[V]]) {
+			func(it *Entry[K, *call[V]]) {
 				if it.Loaded() && it.Value() == c {
 					chs = append(chs, it.Value().chans...)
 					it.Delete()

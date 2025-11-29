@@ -140,7 +140,7 @@ func TestMap_InterfaceKey(t *testing.T) {
 func TestMap_Compute_Basic(t *testing.T) {
 	m := NewMap[string, int]()
 
-	ret, loaded := m.Compute("k1", func(e *MapEntry[string, int]) {
+	ret, loaded := m.Compute("k1", func(e *Entry[string, int]) {
 		e.Update(5)
 	})
 	if loaded || ret != 5 {
@@ -151,7 +151,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k2", 1)
-	ret, loaded = m.Compute("k2", func(e *MapEntry[string, int]) {
+	ret, loaded = m.Compute("k2", func(e *Entry[string, int]) {
 		e.Update(e.Value() + 1)
 	})
 	if !loaded || ret != 2 {
@@ -162,7 +162,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k3", 10)
-	ret, loaded = m.Compute("k3", func(e *MapEntry[string, int]) {
+	ret, loaded = m.Compute("k3", func(e *Entry[string, int]) {
 		e.Delete()
 	})
 	if !loaded || ret != 0 {
@@ -173,7 +173,7 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 
 	m.Store("k4", 7)
-	ret, loaded = m.Compute("k4", func(e *MapEntry[string, int]) {
+	ret, loaded = m.Compute("k4", func(e *Entry[string, int]) {
 	})
 	if !loaded || ret != 7 {
 		t.Fatalf("Compute cancel ret=%d ok=%v", ret, loaded)
@@ -206,7 +206,7 @@ func TestMap_ComputeRange_UpdateDeleteCancel(t *testing.T) {
 	m.Store("b", 2)
 	m.Store("c", 3)
 
-	m.ComputeRange(func(e *MapEntry[string, int]) bool {
+	m.ComputeRange(func(e *Entry[string, int]) bool {
 		if e.Key() == "c" {
 			e.Delete()
 			return true
@@ -6448,7 +6448,7 @@ func TestMap_RangeProcess_BlockWriters_Strict(t *testing.T) {
 				default:
 					key := rand.IntN(N)
 					startTime := time.Now()
-					m.Compute(key, func(e *MapEntry[int, testValue]) {
+					m.Compute(key, func(e *Entry[int, testValue]) {
 						if !e.Loaded() {
 							return
 						}
@@ -6585,7 +6585,7 @@ func TestMap_RangeProcess_AllowWriters_Concurrent(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.Compute(key, func(e *MapEntry[int, testValue]) {
+					m.Compute(key, func(e *Entry[int, testValue]) {
 						if !e.Loaded() {
 							return
 						}
@@ -6780,7 +6780,7 @@ func TestMap_RangeProcess_TornReadDetection_Stress(t *testing.T) {
 					return
 				default:
 					key := rand.IntN(N)
-					m.Compute(key, func(e *MapEntry[int, complexValue]) {
+					m.Compute(key, func(e *Entry[int, complexValue]) {
 						if !e.Loaded() {
 							return
 						}

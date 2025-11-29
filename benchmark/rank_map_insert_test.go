@@ -69,7 +69,7 @@ func testInsert_pb_FlatMapOf(
 
 				m.Compute(
 					j,
-					func(e *synx.FlatMapEntry[int, int]) {
+					func(e *synx.Entry[int, int]) {
 						e.Update(j)
 					},
 				)
@@ -199,7 +199,7 @@ func testInsert_pb_MapOf(
 				// m.Store(Int(j), j)
 				m.Compute(
 					Int(j),
-					func(e *synx.MapEntry[Int, int]) {
+					func(e *synx.Entry[Int, int]) {
 						e.Update(j)
 					},
 				)
@@ -338,7 +338,7 @@ func testInsertString_pb_FlatMapOf(
 
 				m.Compute(
 					strconv.Itoa(j),
-					func(e *synx.FlatMapEntry[string, int]) {
+					func(e *synx.Entry[string, int]) {
 						e.Update(j)
 					},
 				)

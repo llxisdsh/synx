@@ -535,58 +535,6 @@ func (m *Map[K, V]) CompareAndDelete(key K, old V) (deleted bool) {
 	return deleted
 }
 
-// MapEntry represents an entry being processed in Compute/ComputeRange operations.
-// It provides methods to update or delete the entry during iteration.
-// WARNING: Transient view valid only within the callback. Never store or retain
-// this struct or its pointer beyond the callback; doing so may lead to dangling
-// pointers and invalid references.
-// 警告：此结构体仅在回调期间有效；不要保存或持有其指针，避免悬垂指针。
-type MapEntry[K comparable, V any] struct {
-	entry  Entry_[K, V]
-	loaded bool
-	op     computeOp
-}
-
-// Key returns the key of the current entry.
-//
-//go:nosplit
-func (e *MapEntry[K, V]) Key() K {
-	return e.entry.Key
-}
-
-// Value returns the value of the current entry.
-//
-//go:nosplit
-func (e *MapEntry[K, V]) Value() V {
-	return e.entry.Value
-}
-
-// Loaded returns true if the entry is loaded, false otherwise.
-//
-//go:nosplit
-func (e *MapEntry[K, V]) Loaded() bool {
-	return e.loaded
-}
-
-// Update performs an upsert on the current entry.
-// If Loaded()==true, replaces the value;
-// if false, inserts the key with newValue.
-//
-//go:nosplit
-func (e *MapEntry[K, V]) Update(newValue V) {
-	e.entry.Value = newValue
-	e.op = updateOp
-}
-
-// Delete marks the current entry for deletion.
-// The entry will be removed from the map.
-//
-//go:nosplit
-func (e *MapEntry[K, V]) Delete() {
-	e.entry.Value = *new(V)
-	e.op = deleteOp
-}
-
 // Compute performs a compute-style, atomic update for the given key.
 //
 // Concurrency model:
@@ -596,7 +544,7 @@ func (e *MapEntry[K, V]) Delete() {
 //
 // Callback signature:
 //
-//		fn(e *MapEntry[K, V])
+//		fn(e *Entry[K, V])
 //
 //	  - Use e.Loaded() and e.Value() to inspect the current state
 //	  - Use e.Update(newV) to upsert; Use e.Delete() to remove
@@ -611,7 +559,7 @@ func (e *MapEntry[K, V]) Delete() {
 //   - loaded: True if the key existed before the callback, false otherwise.
 func (m *Map[K, V]) Compute(
 	key K,
-	fn func(e *MapEntry[K, V]),
+	fn func(e *Entry[K, V]),
 ) (actual V, loaded bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
@@ -620,7 +568,7 @@ func (m *Map[K, V]) Compute(
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 	return m.computeEntry(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
-			var it MapEntry[K, V]
+			var it Entry[K, V]
 			if e != nil {
 				it.entry = *e
 				it.loaded = true
@@ -658,7 +606,7 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 //
 // Callback signature:
 //
-//		fn(e *MapEntry[K, V]) bool
+//		fn(e *Entry[K, V]) bool
 //
 //	  - e.Update(newV): update the entry to newV
 //	  - e.Delete(): delete the entry
@@ -681,10 +629,10 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 //
 // Recommendation: keep fn lightweight to reduce lock hold time.
 func (m *Map[K, V]) ComputeRange(
-	fn func(e *MapEntry[K, V]) bool,
+	fn func(e *Entry[K, V]) bool,
 	blockWriters ...bool,
 ) {
-	it := MapEntry[K, V]{loaded: true}
+	it := Entry[K, V]{loaded: true}
 	m.computeRangeEntry(func(e *Entry_[K, V]) (*Entry_[K, V], bool) {
 		it.entry = *e
 		it.op = cancelOp
@@ -706,8 +654,8 @@ func (m *Map[K, V]) ComputeRange(
 //go:nosplit
 func (m *Map[K, V]) Entries(
 	blockWriters ...bool,
-) func(yield func(e *MapEntry[K, V]) bool) {
-	return func(yield func(e *MapEntry[K, V]) bool) {
+) func(yield func(e *Entry[K, V]) bool) {
+	return func(yield func(e *Entry[K, V]) bool) {
 		m.ComputeRange(yield, blockWriters...)
 	}
 }
