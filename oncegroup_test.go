@@ -52,17 +52,35 @@ func TestOnceGroup_DoChan(t *testing.T) {
 	key := "dup"
 	n := 32
 
-	start := make(chan struct{})
+	primaryStarted := make(chan struct{})
+	releasePrimary := make(chan struct{})
+
 	var wg sync.WaitGroup
 	wg.Add(n)
-	for range n {
+
+	go func() {
+		defer wg.Done()
+		ch := g.DoChan(key, func() (string, error) {
+			close(primaryStarted)
+			<-releasePrimary
+			return "ok", nil
+		})
+		r := <-ch
+		if r.Err != nil || r.Val != "ok" {
+			t.Errorf("bad: %v, %v", r.Val, r.Err)
+		}
+		if !r.Shared {
+			t.Errorf("expected shared=true")
+		}
+	}()
+
+	var joined atomic.Int32
+	for i := 1; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			<-start
-			ch := g.DoChan(key, func() (string, error) {
-				time.Sleep(2 * time.Millisecond)
-				return "ok", nil
-			})
+			<-primaryStarted
+			ch := g.DoChan(key, func() (string, error) { return "ok", nil })
+			joined.Add(1)
 			r := <-ch
 			if r.Err != nil || r.Val != "ok" {
 				t.Errorf("bad: %v, %v", r.Val, r.Err)
@@ -72,7 +90,11 @@ func TestOnceGroup_DoChan(t *testing.T) {
 			}
 		}()
 	}
-	close(start)
+
+	for joined.Load() < int32(n-1) {
+		runtime.Gosched()
+	}
+	close(releasePrimary)
 	wg.Wait()
 }
 

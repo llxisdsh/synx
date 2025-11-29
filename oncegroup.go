@@ -179,7 +179,7 @@ func (g *OnceGroup[K, V]) doCall(
 			// Primary goroutine already Goexit'ed; nothing to do here.
 		default:
 			// Normal return: notify DoChan waiters.
-			shared := atomic.LoadInt32(&c.dups) > 0 || len(chs) > 1
+			shared := atomic.LoadInt32(&c.dups) > 0 || len(c.chans) > 1
 			for _, ch := range chs {
 				ch <- OnceGroupResult[V]{Val: c.val, Err: c.err, Shared: shared}
 			}
