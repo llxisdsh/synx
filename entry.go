@@ -15,7 +15,7 @@ type Entry[K comparable, V any] struct {
 	op     computeOp
 }
 
-// Key returns the entry's key. Returns zero value if not loaded.
+// Key returns the entry's key.
 //
 //go:nosplit
 func (e *Entry[K, V]) Key() K {

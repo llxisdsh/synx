@@ -158,7 +158,7 @@ func (m *FlatMap[K, V]) slowInit() {
 func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	table := m.tableSeq.Read(&m.table)
 	if table.buckets.ptr == nil {
-		return
+		return *new(V), false
 	}
 
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
@@ -182,7 +182,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 			}
 		}
 	}
-	return
+	return *new(V), false
 }
 
 // LoadOrStore returns the existing value for the key if present.
@@ -230,7 +230,7 @@ func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) 
 			e.Update(value)
 		}
 	})
-	return
+	return previous, loaded
 }
 
 // LoadAndDelete deletes the value for a key, returning the previous value.
@@ -242,7 +242,7 @@ func (m *FlatMap[K, V]) LoadAndDelete(key K) (previous V, loaded bool) {
 			e.Delete()
 		}
 	})
-	return
+	return previous, loaded
 }
 
 // Store sets the value for a key.
@@ -259,7 +259,7 @@ func (m *FlatMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 		previous = e.Value()
 		e.Update(value)
 	})
-	return
+	return previous, loaded
 }
 
 // Delete deletes the value for a key.
@@ -337,11 +337,14 @@ func (m *FlatMap[K, V]) Compute(
 			oldB     *flatBucket[K, V]
 			oldIdx   int
 			oldMeta  uint64
-			it       Entry[K, V]
 			emptyB   *flatBucket[K, V]
 			emptyIdx int
 			lastB    *flatBucket[K, V]
 		)
+		it := &Entry[K, V]{entry: Entry_[K, V]{Key: key}}
+		if EmbeddedHash_ {
+			it.entry.SetHash(hash)
+		}
 
 	findLoop:
 		for b := root; b != nil; b = (*flatBucket[K, V])(b.next) {
@@ -370,20 +373,14 @@ func (m *FlatMap[K, V]) Compute(
 			lastB = b
 		}
 
-		fn(noEscape(&it))
-		actual = it.Value()
-		loaded = it.Loaded()
+		fn(noEscape(it))
 		switch it.op {
 		case updateOp:
-			if loaded {
+			if it.loaded {
 				e := oldB.At(oldIdx)
 				oldB.seq.WriteLocked(e, it.entry)
 				root.Unlock()
-				return
-			}
-			it.entry.Key = key
-			if EmbeddedHash_ {
-				it.entry.SetHash(hash)
+				return it.entry.Value, it.loaded
 			}
 			// insert new
 			if emptyB != nil {
@@ -395,7 +392,7 @@ func (m *FlatMap[K, V]) Compute(
 
 				root.Unlock()
 				table.AddSize(idx, 1)
-				return
+				return it.entry.Value, it.loaded
 			}
 			// append new bucket
 			bucket := &flatBucket[K, V]{
@@ -417,11 +414,11 @@ func (m *FlatMap[K, V]) Compute(
 					m.tryResize(mapGrowHint, size, 0)
 				}
 			}
-			return
+			return it.entry.Value, it.loaded
 		case deleteOp:
-			if !loaded {
+			if !it.loaded {
 				root.Unlock()
-				return
+				return it.entry.Value, it.loaded
 			}
 			oldB.seq.BeginWriteLocked()
 			oldB.At(oldIdx).WriteUnfenced(Entry_[K, V]{})
@@ -441,11 +438,11 @@ func (m *FlatMap[K, V]) Compute(
 					}
 				}
 			}
-			return
+			return it.entry.Value, it.loaded
 		default:
 			// cancelOp: No-op
 			root.Unlock()
-			return
+			return it.entry.Value, it.loaded
 		}
 	}
 }
@@ -542,7 +539,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 		if table.buckets.ptr == nil {
 			return
 		}
-		it := Entry[K, V]{
+		it := &Entry[K, V]{
 			loaded: true,
 		}
 		for i := 0; i <= table.mask; i++ {
@@ -555,7 +552,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 					e := b.At(j)
 					it.entry = *e.Ptr()
 					it.op = cancelOp
-					shouldContinue := fn(noEscape(&it))
+					shouldContinue := fn(noEscape(it))
 					switch it.op {
 					case updateOp:
 						b.seq.WriteLocked(e, it.entry)

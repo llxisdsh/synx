@@ -206,14 +206,14 @@ func (m *Map[K, V]) slowInit() *mapTable {
 func (m *Map[K, V]) Load(key K) (value V, ok bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
-		return
+		return *new(V), false
 	}
 
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 	if e := m.loadEntry(table, hash, &key); e != nil {
 		return e.Value, true
 	}
-	return
+	return *new(V), false
 }
 
 // LoadOrStore retrieves an existing value or stores a new one if the key
@@ -295,7 +295,7 @@ func (m *Map[K, V]) LoadOrStoreFn(
 func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
-		return
+		return *new(V), false
 	}
 
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
@@ -303,7 +303,7 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 	if enableFastPath {
 		e := m.loadEntry(table, hash, &key)
 		if e == nil {
-			return
+			return *new(V), false
 		}
 
 		// deduplicates identical values
@@ -332,7 +332,7 @@ func (m *Map[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
 func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	table := (*mapTable)(LoadPtr(&m.table))
 	if table == nil {
-		return
+		return *new(V), false
 	}
 
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
@@ -340,7 +340,7 @@ func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	if enableFastPath {
 		e := m.loadEntry(table, hash, &key)
 		if e == nil {
-			return
+			return *new(V), false
 		}
 	}
 
@@ -568,19 +568,19 @@ func (m *Map[K, V]) Compute(
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 	return m.computeEntry(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
-			var it Entry[K, V]
+			it := &Entry[K, V]{entry: Entry_[K, V]{Key: key}}
 			if e != nil {
 				it.entry = *e
 				it.loaded = true
 			}
-			fn(noEscape(&it))
+			fn(noEscape(it))
 			switch it.op {
 			case updateOp:
-				return &Entry_[K, V]{Value: it.Value()}, it.Value(), it.loaded
+				return &Entry_[K, V]{Value: it.entry.Value}, it.entry.Value, it.loaded
 			case deleteOp:
-				return nil, it.Value(), it.loaded
+				return nil, it.entry.Value, it.loaded
 			default:
-				return e, it.Value(), it.loaded
+				return e, it.entry.Value, it.loaded
 			}
 		},
 	)
@@ -632,11 +632,11 @@ func (m *Map[K, V]) ComputeRange(
 	fn func(e *Entry[K, V]) bool,
 	blockWriters ...bool,
 ) {
-	it := Entry[K, V]{loaded: true}
+	it := &Entry[K, V]{loaded: true}
 	m.computeRangeEntry(func(e *Entry_[K, V]) (*Entry_[K, V], bool) {
 		it.entry = *e
 		it.op = cancelOp
-		shouldContinue := fn(noEscape(&it))
+		shouldContinue := fn(noEscape(it))
 		switch it.op {
 		case updateOp:
 			return &Entry_[K, V]{Value: it.entry.Value}, shouldContinue
