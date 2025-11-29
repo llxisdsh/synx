@@ -185,9 +185,11 @@ func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
 // publish tear-free snapshots.
 //
 // Copy semantics:
-//   - On TSO (amd64/386/s390x), plain typed copies are sufficient.
-//   - On weak models, uintptr-sized atomics are used inside the stable
+//   - Reads: On TSO (amd64/386/s390x), plain typed copies are sufficient.
+//     On weak models, uintptr-sized atomic loads are used inside the stable
 //     window when alignment/size permit; otherwise a typed copy is used.
+//   - Writes: Always plain typed assignment to preserve GC write barriers
+//     and avoid publishing pointers via uintptr/unsafe stores.
 //
 // Safety:
 //   - ReadUnfenced/WriteUnfenced must run under a seqlock-stable window or
@@ -198,7 +200,8 @@ type seqlockSlot[T any] struct {
 }
 
 // ReadUnfenced copies buf into v using uintptr-sized atomic loads when
-// alignment and size permit; otherwise falls back to a typed copy.
+// alignment and size permit on weak memory models to avoid reordering;
+// otherwise falls back to a typed copy.
 // Must be called under a lock or within a seqlock-stable window.
 func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 	if IsTSO_ {
@@ -253,8 +256,9 @@ func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 	return slot.buf
 }
 
-// WriteUnfenced writes v into buf using uintptr-sized atomic stores when
-// alignment and size permit; otherwise falls back to a typed copy.
+// WriteUnfenced writes v into buf via a plain typed assignment.
+// This preserves Go's GC write barriers and avoids publishing pointers
+// through uintptr/unsafe atomic stores.
 // Must be called under a lock or within a seqlock-stable window.
 func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
 	slot.buf = v
