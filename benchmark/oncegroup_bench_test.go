@@ -74,7 +74,10 @@ func BenchmarkOnceGroupDoChanSameKey(b *testing.B) {
 	key := "same"
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			ch := g.DoChan(key, func() (any, error) { return 1, nil })
+			ch := g.DoChan(key, func() (any, error) {
+				heavyWork(128)
+				return 1, nil
+			})
 			_ = <-ch
 		}
 	})
@@ -87,7 +90,10 @@ func BenchmarkOnceGroupDoChanSameKey_SingleFlight(b *testing.B) {
 	key := "same"
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			ch := g.DoChan(key, func() (any, error) { return 1, nil })
+			ch := g.DoChan(key, func() (any, error) {
+				heavyWork(128)
+				return 1, nil
+			})
 			_ = <-ch
 		}
 	})
@@ -101,7 +107,10 @@ func BenchmarkOnceGroupDoChanManyKeys(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			key := "k_" + strconvSmall(i&1023)
-			ch := g.DoChan(key, func() (any, error) { return i, nil })
+			ch := g.DoChan(key, func() (any, error) {
+				heavyWork(64)
+				return i, nil
+			})
 			_ = <-ch
 			i++
 		}
@@ -116,7 +125,10 @@ func BenchmarkOnceGroupDoChanManyKeys_SingleFlight(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			key := "k_" + strconvSmall(i&1023)
-			ch := g.DoChan(key, func() (any, error) { return i, nil })
+			ch := g.DoChan(key, func() (any, error) {
+				heavyWork(64)
+				return i, nil
+			})
 			_ = <-ch
 			i++
 		}

@@ -19,11 +19,12 @@ type OnceGroupResult[V any] struct {
 
 // call represents an in-flight or completed OnceGroup.Do call
 type call[V any] struct {
-	wg    sync.WaitGroup
-	val   V
-	err   error
-	dups  int32
-	chans []chan<- OnceGroupResult[V]
+	wg        sync.WaitGroup
+	val       V
+	err       error
+	dups      int32
+	chans     []chan<- OnceGroupResult[V]
+	completed int32
 }
 
 // OnceGroup represents a class of work and forms a namespace in
@@ -41,21 +42,17 @@ func (g *OnceGroup[K, V]) Do(
 	key K,
 	fn func() (V, error),
 ) (V, error, bool) {
-	var c *call[V]
-	_, loaded := g.m.Compute(
-		key,
-		func(it *Entry[K, *call[V]]) {
-			if it.Loaded() {
-				c = it.Value()
-				atomic.AddInt32(&c.dups, 1)
-			} else {
-				c = &call[V]{}
-				c.wg.Add(1)
-				it.Update(c)
-			}
-		},
-	)
+	primary := &call[V]{}
+	primary.wg.Add(1)
+	c, loaded := g.m.LoadOrStore(key, primary)
 	if loaded {
+		// mark duplication under lock to ensure shared=true visibility
+		_, _ = g.m.Compute(key, func(it *Entry[K, *call[V]]) {
+			if it.Loaded() {
+				atomic.AddInt32(&it.Value().dups, 1)
+			}
+		})
+
 		c.wg.Wait()
 		var e *panicError
 		if errors.As(c.err, &e) {
@@ -68,7 +65,7 @@ func (g *OnceGroup[K, V]) Do(
 
 	// Primary executes with panic/Goexit semantics compatible with x/sync/singleflight.
 	g.doCall(c, key, fn)
-	shared := atomic.LoadInt32(&c.dups) > 0
+	shared := atomic.LoadInt32(&c.dups) > 0 || len(c.chans) > 1
 	return c.val, c.err, shared
 }
 
@@ -81,27 +78,41 @@ func (g *OnceGroup[K, V]) DoChan(
 	fn func() (V, error),
 ) <-chan OnceGroupResult[V] {
 	ch := make(chan OnceGroupResult[V], 1)
-	var c *call[V]
-	_, loaded := g.m.Compute(
-		key,
-		func(it *Entry[K, *call[V]]) {
-			if it.Loaded() {
-				c = it.Value()
-				atomic.AddInt32(&c.dups, 1)
-				c.chans = append(c.chans, ch)
-			} else {
-				c = &call[V]{
-					chans: append(
-						make([]chan<- OnceGroupResult[V], 0, runtime.GOMAXPROCS(0)),
-						ch,
-					),
-				}
-				c.wg.Add(1)
-				it.Update(c)
-			}
-		},
-	)
+	c0 := &call[V]{
+		chans: append(
+			make([]chan<- OnceGroupResult[V], 0, runtime.GOMAXPROCS(0)),
+			ch,
+		),
+	}
+	c0.wg.Add(1)
+	c, loaded := g.m.LoadOrStore(key, c0)
 	if loaded {
+		// Duplicates: if already completed, send immediately; otherwise wait on wg and send
+		if atomic.LoadInt32(&c.completed) == 1 {
+			shared := atomic.LoadInt32(&c.dups) > 0 || len(c.chans) > 1
+			ch <- OnceGroupResult[V]{Val: c.val, Err: c.err, Shared: shared}
+			return ch
+		}
+		// Mark duplication for shared flag visibility
+		_, _ = g.m.Compute(key, func(it *Entry[K, *call[V]]) {
+			if it.Loaded() {
+				atomic.AddInt32(&it.Value().dups, 1)
+			}
+		})
+		go func(c *call[V], ch chan<- OnceGroupResult[V]) {
+			c.wg.Wait()
+			var e *panicError
+			switch {
+			case errors.As(c.err, &e):
+				go panic(e)
+				select {}
+			case errors.Is(c.err, errGoexit):
+				return
+			default:
+				shared := atomic.LoadInt32(&c.dups) > 0 || len(c.chans) > 1
+				ch <- OnceGroupResult[V]{Val: c.val, Err: c.err, Shared: shared}
+			}
+		}(c, ch)
 		return ch
 	}
 	go g.doCall(c, key, fn)
@@ -148,6 +159,7 @@ func (g *OnceGroup[K, V]) doCall(
 
 		// Complete the call and remove the key atomically.
 		c.wg.Done()
+		atomic.StoreInt32(&c.completed, 1)
 
 		var chs []chan<- OnceGroupResult[V]
 		_, _ = g.m.Compute(
@@ -155,7 +167,6 @@ func (g *OnceGroup[K, V]) doCall(
 			func(it *Entry[K, *call[V]]) {
 				if it.Loaded() && it.Value() == c {
 					chs = append(chs, it.Value().chans...)
-					it.Delete()
 				}
 			},
 		)
