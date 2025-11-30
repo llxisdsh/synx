@@ -9,6 +9,8 @@ func NewFlatMap[K comparable, V any](options ...func(*MapConfig)) *FlatMap[K, V]
 }
 
 // Stubs to satisfy size-related tests under race build.
-type flatRebuildState[K comparable, V any] struct{}
-type flatTable[K comparable, V any] struct{}
-type flatBucket[K comparable, V any] struct{}
+type (
+	flatRebuildState[K comparable, V any] struct{}
+	flatTable[K comparable, V any]        struct{}
+	flatBucket[K comparable, V any]       struct{}
+)
