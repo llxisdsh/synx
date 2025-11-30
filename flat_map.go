@@ -152,10 +152,10 @@ func (m *FlatMap[K, V]) slowInit() {
 
 // Load retrieves the value for a key.
 //
-//   - Fast path: per-bucket seqlock read; an even and stable sequence yields
+//   - Per-bucket seqlock read; an even and stable sequence yields
 //     a consistent snapshot.
-//   - Contention handling: short spinning on observed writes (odd seq) or
-//     instability; no locked fallback path.
+//   - Short spinning on observed writes (odd seq) or
+//     instability.
 //   - Provides stable latency under high concurrency.
 func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	table := m.tableSeq.Read(&m.table)
@@ -275,8 +275,6 @@ func (m *FlatMap[K, V]) Delete(key K) {
 //
 // Concurrency model:
 //   - Acquires the root-bucket lock to serialize write/resize cooperation.
-//   - Performs per-bucket seqlock writes (odd/even sequence) to minimize the
-//     write window and preserve reader consistency.
 //   - If a resize is observed, cooperates to finish copying and restarts on
 //     the latest table.
 //
@@ -510,16 +508,13 @@ func (m *FlatMap[K, V]) All() func(yield func(K, V) bool) {
 //	  - e.Update(newV): update the entry to newV
 //	  - e.Delete(): delete the entry
 //	  - default (no op): keep the entry unchanged
-//	  - return true to continue; return false to stop iteration immediately
-//	    (the entry passed to the final callback is not modified when stopping)
+//	  - return true to continue; return false to stop iteration
 //
 // Concurrency & consistency:
 //   - Cooperates with concurrent grow/shrink; if a resize is detected, it
 //     helps complete copying, then continues on the latest table.
 //   - Holds the root-bucket lock while processing its bucket chain to
 //     coordinate with writers/resize operations.
-//   - Uses per-bucket seqlock to minimize write windows and preserve reader
-//     consistency.
 //
 // Parameters:
 //   - fn: user function applied to each key-value pair.

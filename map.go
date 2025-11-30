@@ -611,16 +611,13 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 //	  - e.Update(newV): update the entry to newV
 //	  - e.Delete(): delete the entry
 //	  - default (no op): keep the entry unchanged
-//	  - return true to continue; return false to stop iteration immediately
-//	    (the entry passed to the final callback is not modified when stopping)
+//	  - return true to continue; return false to stop iteration
 //
 // Concurrency & consistency:
 //   - Cooperates with concurrent grow/shrink; if a resize is detected, it
 //     helps complete copying, then continues on the latest table.
 //   - Holds the root-bucket lock while processing its bucket chain to
 //     coordinate with writers/resize operations.
-//   - Uses per-bucket seqlock discipline internally to minimize write windows
-//     and preserve reader consistency.
 //
 // Parameters:
 //   - fn: user function applied to each key-value pair.
