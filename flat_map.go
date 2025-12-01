@@ -601,19 +601,6 @@ func (m *FlatMap[K, V]) Size() int {
 	return table.SumSize()
 }
 
-// IsZero checks if the map is empty.
-// This is faster than checking Size() == 0 as it can return early.
-//
-//go:nosplit
-func (m *FlatMap[K, V]) IsZero() bool {
-	table := m.tableSeq.Read(&m.table)
-	if table.buckets.ptr == nil {
-		return true
-	}
-
-	return !table.SumSizeExceeds(0)
-}
-
 // Clear clears all key-value pairs from the map.
 func (m *FlatMap[K, V]) Clear() {
 	table := m.tableSeq.Read(&m.table)
@@ -882,18 +869,6 @@ func (t *flatTable[K, V]) SumSize() int {
 		sum += atomic.LoadUintptr(&t.size.At(i).C)
 	}
 	return int(sum)
-}
-
-//go:nosplit
-func (t *flatTable[K, V]) SumSizeExceeds(limit int) bool {
-	var sum uintptr
-	for i := 0; i <= int(t.sizeMask); i++ {
-		sum += atomic.LoadUintptr(&t.size.At(i).C)
-		if int(sum) > limit {
-			return true
-		}
-	}
-	return false
 }
 
 //go:nosplit

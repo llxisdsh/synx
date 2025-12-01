@@ -667,17 +667,6 @@ func (m *Map[K, V]) Size() int {
 	return table.SumSize()
 }
 
-// IsZero checks zero values, faster than Size().
-//
-//go:nosplit
-func (m *Map[K, V]) IsZero() bool {
-	table := (*mapTable)(LoadPtr(&m.table))
-	if table == nil {
-		return true
-	}
-	return !table.SumSizeExceeds(0)
-}
-
 // Clear compatible with `sync.Map`
 func (m *Map[K, V]) Clear() {
 	table := (*mapTable)(LoadPtr(&m.table))
@@ -1431,18 +1420,6 @@ func (t *mapTable) SumSize() int {
 		sum += LoadInt(&t.size.At(i).C)
 	}
 	return int(sum)
-}
-
-//go:nosplit
-func (t *mapTable) SumSizeExceeds(limit int) bool {
-	var sum uintptr
-	for i := 0; i <= t.sizeMask; i++ {
-		sum += LoadInt(&t.size.At(i).C)
-		if int(sum) > limit {
-			return true
-		}
-	}
-	return false
 }
 
 // Lock acquires a spinlock for the bucket using embedded metadata.

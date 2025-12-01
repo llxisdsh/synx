@@ -4540,9 +4540,6 @@ func TestMapClone(t *testing.T) {
 		m := NewMap[string, int]()
 		var clone Map[string, int]
 		m.CloneTo(&clone)
-		if !clone.IsZero() {
-			t.Fatalf("expected cloned empty map to be zero, got non-zero")
-		}
 		if clone.Size() != 0 {
 			t.Fatalf(
 				"expected cloned empty map size to be 0, got: %d",
@@ -6133,12 +6130,12 @@ func TestMap_DefaultHasherEdgeCases(t *testing.T) {
 func TestMap_IsZero(t *testing.T) {
 	t.Run("IsZero", func(t *testing.T) {
 		m := NewMap[string, int]()
-		if !m.IsZero() {
+		if m.Size() != 0 {
 			t.Errorf("New map should be zero")
 		}
 
 		m.Store("key", 1)
-		if m.IsZero() {
+		if m.Size() == 0 {
 			t.Errorf("Map with elements should not be zero")
 		}
 	})

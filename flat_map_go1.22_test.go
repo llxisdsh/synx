@@ -621,19 +621,19 @@ func TestFlatMap_IsZero(t *testing.T) {
 	var m FlatMap[string, int]
 
 	// Test empty map
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected IsZero() to return true for empty map")
 	}
 
 	// Add an item
 	m.Store("key1", 100)
-	if m.IsZero() {
+	if m.Size() == 0 {
 		t.Error("Expected IsZero() to return false for non-empty map")
 	}
 
 	// Delete the item
 	m.Delete("key1")
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected IsZero() to return true after deleting all items")
 	}
 
@@ -641,13 +641,13 @@ func TestFlatMap_IsZero(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		m.Store(fmt.Sprintf("key_%d", i), i)
 	}
-	if m.IsZero() {
+	if m.Size() == 0 {
 		t.Error("Expected IsZero() to return false for map with multiple items")
 	}
 
 	// Test Clear as an alternative to individual deletes
 	m.Clear()
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected IsZero() to return true after Clear()")
 	}
 
@@ -655,7 +655,7 @@ func TestFlatMap_IsZero(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		m.Store(fmt.Sprintf("test_%d", i), i*100)
 	}
-	if m.IsZero() {
+	if m.Size() == 0 {
 		t.Error("Expected IsZero() to return false after adding items")
 	}
 
@@ -663,7 +663,7 @@ func TestFlatMap_IsZero(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		m.Delete(fmt.Sprintf("test_%d", i))
 	}
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected IsZero() to return true after deleting all items individually")
 	}
 }
@@ -1919,7 +1919,7 @@ func TestFlatMap_Clear(t *testing.T) {
 
 	// Test clear on empty map
 	m.Clear()
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty after clearing empty map")
 	}
 	if size := m.Size(); size != 0 {
@@ -1936,7 +1936,7 @@ func TestFlatMap_Clear(t *testing.T) {
 	if size := m.Size(); size != 10 {
 		t.Errorf("Expected size 10 before clear, got %d", size)
 	}
-	if m.IsZero() {
+	if m.Size() == 0 {
 		t.Error("Expected map not to be empty before clear")
 	}
 
@@ -1944,7 +1944,7 @@ func TestFlatMap_Clear(t *testing.T) {
 	m.Clear()
 
 	// Verify map is empty
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty after clear")
 	}
 	if size := m.Size(); size != 0 {
@@ -2036,7 +2036,7 @@ func TestFlatMap_ClearLargeMap(t *testing.T) {
 	if size := m.Size(); size != 0 {
 		t.Errorf("Expected size 0 after clear, got %d", size)
 	}
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty after clear")
 	}
 
@@ -2097,7 +2097,7 @@ func TestFlatMap_ClearConcurrent(t *testing.T) {
 	if size := m.Size(); size != 0 {
 		t.Errorf("Expected size 0 after concurrent clear, got %d", size)
 	}
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty after concurrent clear")
 	}
 }
@@ -2207,7 +2207,7 @@ func TestFlatMap_ClearMultipleTimes(t *testing.T) {
 		if size := m.Size(); size != 0 {
 			t.Errorf("Round %d: expected size 0 after clear, got %d", round, size)
 		}
-		if !m.IsZero() {
+		if m.Size() != 0 {
 			t.Errorf("Round %d: expected map to be empty after clear", round)
 		}
 	}
@@ -2216,7 +2216,7 @@ func TestFlatMap_ClearMultipleTimes(t *testing.T) {
 	if size := m.Size(); size != 0 {
 		t.Errorf("Expected final size 0, got %d", size)
 	}
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty at the end")
 	}
 }
@@ -2241,7 +2241,7 @@ func TestFlatMap_ClearWithShrinkEnabled(t *testing.T) {
 	if size := m.Size(); size != 0 {
 		t.Errorf("Expected size 0 after clear, got %d", size)
 	}
-	if !m.IsZero() {
+	if m.Size() != 0 {
 		t.Error("Expected map to be empty after clear")
 	}
 

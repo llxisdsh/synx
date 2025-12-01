@@ -17,16 +17,16 @@ const total = 100_000_000
 
 func TestInsert_pb_FlatMapOf(t *testing.T) {
 	t.Run("1 no_pre_size", func(t *testing.T) {
-		testInsert_pb_FlatMapOf(t, total, 1, false, true)
+		testInsert_pb_FlatMapOf(t, total, 1, false, true, true)
 	})
 	t.Run("64 no_pre_size", func(t *testing.T) {
-		testInsert_pb_FlatMapOf(t, total, runtime.GOMAXPROCS(0), false, true)
+		testInsert_pb_FlatMapOf(t, total, runtime.GOMAXPROCS(0), false, true, false)
 	})
 	t.Run("1 pre_size", func(t *testing.T) {
-		testInsert_pb_FlatMapOf(t, total, 1, true, false)
+		testInsert_pb_FlatMapOf(t, total, 1, true, false, false)
 	})
 	t.Run("64 pre_size", func(t *testing.T) {
-		testInsert_pb_FlatMapOf(t, total, runtime.GOMAXPROCS(0), true, false)
+		testInsert_pb_FlatMapOf(t, total, runtime.GOMAXPROCS(0), true, false, false)
 	})
 }
 
@@ -36,6 +36,7 @@ func testInsert_pb_FlatMapOf(
 	numCPU int,
 	preSize bool,
 	testLoad bool,
+	testDelete bool,
 ) {
 	time.Sleep(2 * time.Second)
 	runtime.GC()
@@ -81,7 +82,7 @@ func testInsert_pb_FlatMapOf(
 	wg.Wait()
 
 	elapsed := time.Since(start)
-
+	t.Logf("----------------------------------")
 	size := m.Size()
 	if size != total {
 		t.Errorf("Expected size %d, got %d", total, size)
@@ -128,6 +129,7 @@ func testInsert_pb_FlatMapOf(
 		}
 		wg.Wait()
 		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
 		t.Logf("Load %d items in %v", total, elapsed)
 		t.Logf(
 			"Average: %.2f ns/op",
@@ -138,20 +140,44 @@ func testInsert_pb_FlatMapOf(
 			float64(total)/(elapsed.Seconds()*1000000),
 		)
 	}
+
+	if testDelete {
+		var wg sync.WaitGroup
+		wg.Add(numCPU)
+
+		start := time.Now()
+		for e := range m.Entries() {
+			e.Delete()
+		}
+		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
+		t.Logf("TestDelete %d items in %v", total, elapsed)
+		t.Logf(
+			"Average: %.2f ns/op",
+			float64(elapsed.Nanoseconds())/float64(total),
+		)
+		t.Logf(
+			"Throughput: %.2f million ops/sec",
+			float64(total)/(elapsed.Seconds()*1000000),
+		)
+		if m.Size() != 0 {
+			t.Errorf("Map is not zero after TestDelete, size: %d", m.Size())
+		}
+	}
 }
 
 func TestInsert_pb_MapOf(t *testing.T) {
 	t.Run("1 no_pre_size", func(t *testing.T) {
-		testInsert_pb_MapOf(t, total, 1, false, true)
+		testInsert_pb_MapOf(t, total, 1, false, true, true)
 	})
 	t.Run("64 no_pre_size", func(t *testing.T) {
-		testInsert_pb_MapOf(t, total, runtime.GOMAXPROCS(0), false, true)
+		testInsert_pb_MapOf(t, total, runtime.GOMAXPROCS(0), false, true, false)
 	})
 	t.Run("1 pre_size", func(t *testing.T) {
-		testInsert_pb_MapOf(t, total, 1, true, false)
+		testInsert_pb_MapOf(t, total, 1, true, false, false)
 	})
 	t.Run("64 pre_size", func(t *testing.T) {
-		testInsert_pb_MapOf(t, total, runtime.GOMAXPROCS(0), true, false)
+		testInsert_pb_MapOf(t, total, runtime.GOMAXPROCS(0), true, false, false)
 	})
 }
 
@@ -173,6 +199,7 @@ func testInsert_pb_MapOf(
 	numCPU int,
 	preSize bool,
 	testLoad bool,
+	testDelete bool,
 ) {
 	time.Sleep(2 * time.Second)
 	runtime.GC()
@@ -217,6 +244,7 @@ func testInsert_pb_MapOf(
 	if size != total {
 		t.Errorf("Expected size %d, got %d", total, size)
 	}
+	t.Logf("----------------------------------")
 	// t.Logf("cap  %v", m.Stats())
 	t.Logf("Inserted %d items in %v", total, elapsed)
 	t.Logf("Average: %.2f ns/op", float64(elapsed.Nanoseconds())/float64(total))
@@ -260,6 +288,7 @@ func testInsert_pb_MapOf(
 		}
 		wg.Wait()
 		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
 		t.Logf("Load %d items in %v", total, elapsed)
 		t.Logf(
 			"Average: %.2f ns/op",
@@ -269,6 +298,30 @@ func testInsert_pb_MapOf(
 			"Throughput: %.2f million ops/sec",
 			float64(total)/(elapsed.Seconds()*1000000),
 		)
+	}
+
+	if testDelete {
+		var wg sync.WaitGroup
+		wg.Add(numCPU)
+
+		start := time.Now()
+		for e := range m.Entries() {
+			e.Delete()
+		}
+		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
+		t.Logf("TestDelete %d items in %v", total, elapsed)
+		t.Logf(
+			"Average: %.2f ns/op",
+			float64(elapsed.Nanoseconds())/float64(total),
+		)
+		t.Logf(
+			"Throughput: %.2f million ops/sec",
+			float64(total)/(elapsed.Seconds()*1000000),
+		)
+		if m.Size() != 0 {
+			t.Errorf("Map is not zero after TestDelete, size: %d", m.Size())
+		}
 	}
 }
 
@@ -396,6 +449,7 @@ func testInsertString_pb_FlatMapOf(
 		}
 		wg.Wait()
 		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
 		t.Logf("Load %d items in %v", total, elapsed)
 		t.Logf(
 			"Average: %.2f ns/op",
@@ -548,18 +602,18 @@ func testInsertString_pb_MapOf(
 
 func TestInsert_xsync_MapV4(t *testing.T) {
 	t.Run("1 no_pre_size", func(t *testing.T) {
-		testInsert_xsync_MapV4(t, total, 1, false, true)
+		testInsert_xsync_MapV4(t, total, 1, false, true, true)
 	})
 
 	t.Run("64 no_pre_size", func(t *testing.T) {
-		testInsert_xsync_MapV4(t, total, runtime.GOMAXPROCS(0), false, true)
+		testInsert_xsync_MapV4(t, total, runtime.GOMAXPROCS(0), false, true, false)
 	})
 	t.Run("1 pre_size", func(t *testing.T) {
-		testInsert_xsync_MapV4(t, total, 1, true, false)
+		testInsert_xsync_MapV4(t, total, 1, true, false, false)
 	})
 
 	t.Run("64 pre_size", func(t *testing.T) {
-		testInsert_xsync_MapV4(t, total, runtime.GOMAXPROCS(0), true, false)
+		testInsert_xsync_MapV4(t, total, runtime.GOMAXPROCS(0), true, false, false)
 	})
 }
 
@@ -569,6 +623,7 @@ func testInsert_xsync_MapV4(
 	numCPU int,
 	preSize bool,
 	testLoad bool,
+	testDelete bool,
 ) {
 	time.Sleep(2 * time.Second)
 	runtime.GC()
@@ -657,6 +712,30 @@ func testInsert_xsync_MapV4(
 			"Throughput: %.2f million ops/sec",
 			float64(total)/(elapsed.Seconds()*1000000),
 		)
+	}
+
+	if testDelete {
+		var wg sync.WaitGroup
+		wg.Add(numCPU)
+
+		start := time.Now()
+		for k := range m.Range {
+			m.Delete(k)
+		}
+		elapsed := time.Since(start)
+		t.Logf("----------------------------------")
+		t.Logf("TestDelete %d items in %v", total, elapsed)
+		t.Logf(
+			"Average: %.2f ns/op",
+			float64(elapsed.Nanoseconds())/float64(total),
+		)
+		t.Logf(
+			"Throughput: %.2f million ops/sec",
+			float64(total)/(elapsed.Seconds()*1000000),
+		)
+		if m.Size() != 0 {
+			t.Errorf("Map is not zero after TestDelete, size: %d", m.Size())
+		}
 	}
 }
 
