@@ -1,11 +1,9 @@
 package synx
 
 import (
-	"fmt"
 	"math"
 	"math/rand/v2"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -775,17 +773,6 @@ func (m *Map[K, V]) doResize(
 	}
 }
 
-// String implement the formatting output interface fmt.Stringer
-func (m *Map[K, V]) String() string {
-	const limit = 1024
-	return strings.Replace(
-		fmt.Sprint(m.ToMap(limit)),
-		"map[",
-		"Map[",
-		1,
-	)
-}
-
 // ToMap collect up to limit entries into a map[K]V, limit < 0 is no limit
 func (m *Map[K, V]) ToMap(limit ...int) map[K]V {
 	l := math.MaxInt
@@ -1507,51 +1494,4 @@ func (b *bucket) At(i int) *unsafe.Pointer {
 		unsafe.Pointer(&b.entries),
 		uintptr(i)*unsafe.Sizeof(unsafe.Pointer(nil))),
 	)
-}
-
-// stats returns statistics for the Map. Just like other map
-// methods, this one is thread-safe. Yet it's an O(N) operation,
-// so it should be used only for diagnostics or debugging purposes.
-func (m *Map[K, V]) stats() *mapStats {
-	stats := &mapStats{
-		TotalGrowths: LoadInt(&m.growths),
-		TotalShrinks: LoadInt(&m.shrinks),
-		MinEntries:   math.MaxInt,
-	}
-	table := (*mapTable)(LoadPtr(&m.table))
-	if table == nil {
-		return stats
-	}
-	stats.RootBuckets = table.mask + 1
-	stats.Counter = table.SumSize()
-	stats.CounterLen = table.sizeMask + 1
-	for i := 0; i <= table.mask; i++ {
-		entries := 0
-		for b := table.buckets.At(i); b != nil; b = (*bucket)(LoadPtr(&b.next)) {
-			stats.TotalBuckets++
-			entriesLocal := 0
-			stats.Capacity += entriesPerBucket
-
-			meta := LoadInt(&b.meta)
-			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-				j := firstMarkedByteIndex(marked)
-				if e := (*Entry_[K, V])(LoadPtr(b.At(j))); e != nil {
-					stats.Size++
-					entriesLocal++
-				}
-			}
-			entries += entriesLocal
-			if entriesLocal == 0 {
-				stats.EmptyBuckets++
-			}
-		}
-
-		if entries < stats.MinEntries {
-			stats.MinEntries = entries
-		}
-		if entries > stats.MaxEntries {
-			stats.MaxEntries = entries
-		}
-	}
-	return stats
 }

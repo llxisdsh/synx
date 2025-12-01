@@ -3,6 +3,7 @@
 package synx
 
 import (
+	"math"
 	"math/rand/v2"
 	"runtime"
 	"sync"
@@ -626,6 +627,24 @@ func (m *FlatMap[K, V]) Clear() {
 		newTable.makeTable(minTableLen, cpus)
 		m.tableSeq.WriteLocked(&m.table, newTable)
 	})
+}
+
+// ToMap collect up to limit entries into a map[K]V, limit < 0 is no limit
+func (m *FlatMap[K, V]) ToMap(limit ...int) map[K]V {
+	l := math.MaxInt
+	if len(limit) != 0 {
+		l = limit[0]
+		if l <= 0 {
+			return map[K]V{}
+		}
+	}
+	a := make(map[K]V, min(m.Size(), l))
+	m.Range(func(k K, v V) bool {
+		a[k] = v
+		l--
+		return l > 0
+	})
+	return a
 }
 
 func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, V], bool) {

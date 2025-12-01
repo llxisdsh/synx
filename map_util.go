@@ -1,10 +1,8 @@
 package synx
 
 import (
-	"fmt"
 	"math/bits"
 	"reflect"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -633,69 +631,4 @@ func iTypeOf(a any) *iType {
 type iEmptyInterface struct {
 	Type *iType
 	Data unsafe.Pointer
-}
-
-// ============================================================================
-// Statistics Utilities
-// ============================================================================
-
-// mapStats is Map statistics.
-//
-// Notes:
-//   - map statistics are intended to be used for diagnostic
-//     purposes, not for production code. This means that breaking changes
-//     may be introduced into this struct even between minor releases.
-type mapStats struct {
-	// RootBuckets is the number of root buckets in the hash table.
-	// Each bucket holds a few entries.
-	RootBuckets int
-	// TotalBuckets is the total number of buckets in the hash table,
-	// including root and their chained buckets. Each bucket holds
-	// a few entries.
-	TotalBuckets int
-	// EmptyBuckets is the number of buckets that hold no entries.
-	EmptyBuckets int
-	// Capacity is the Map capacity, i.e., the total number of
-	// entries that all buckets can physically hold. This number
-	// does not consider the load factor.
-	Capacity int
-	// Size is the exact number of entries stored in the map.
-	Size int
-	// Counter is the number of entries stored in the map according
-	// to the internal atomic counter. In the case of concurrent map
-	// modifications, this number may be different from Size.
-	Counter int
-	// CounterLen is the number of internal atomic counter stripes.
-	// This number may grow with the map capacity to improve
-	// multithreaded scalability.
-	CounterLen int
-	// MinEntries is the minimum number of entries per a chain of
-	// buckets, i.e., a root bucket and its chained buckets.
-	MinEntries int
-	// MinEntries is the maximum number of entries per a chain of
-	// buckets, i.e., a root bucket and its chained buckets.
-	MaxEntries int
-	// TotalGrowths is the number of times the hash table grew.
-	TotalGrowths uint32
-	// TotalGrowths is the number of times the hash table shrunk.
-	TotalShrinks uint32
-}
-
-// String returns string representation of map stats.
-func (s *mapStats) String() string {
-	var sb strings.Builder
-	sb.WriteString("mapStats{\n")
-	sb.WriteString(fmt.Sprintf("RootBuckets:  %d\n", s.RootBuckets))
-	sb.WriteString(fmt.Sprintf("TotalBuckets: %d\n", s.TotalBuckets))
-	sb.WriteString(fmt.Sprintf("EmptyBuckets: %d\n", s.EmptyBuckets))
-	sb.WriteString(fmt.Sprintf("Capacity:     %d\n", s.Capacity))
-	sb.WriteString(fmt.Sprintf("Size:         %d\n", s.Size))
-	sb.WriteString(fmt.Sprintf("Counter:      %d\n", s.Counter))
-	sb.WriteString(fmt.Sprintf("CounterLen:   %d\n", s.CounterLen))
-	sb.WriteString(fmt.Sprintf("MinEntries:   %d\n", s.MinEntries))
-	sb.WriteString(fmt.Sprintf("MaxEntries:   %d\n", s.MaxEntries))
-	sb.WriteString(fmt.Sprintf("TotalGrowths: %d\n", s.TotalGrowths))
-	sb.WriteString(fmt.Sprintf("TotalShrinks: %d\n", s.TotalShrinks))
-	sb.WriteString("}\n")
-	return sb.String()
 }

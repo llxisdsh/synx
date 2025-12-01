@@ -21,6 +21,122 @@ import (
 	. "github.com/llxisdsh/synx/internal/opt" // nolint:staticcheck
 )
 
+// ============================================================================
+// Statistics Utilities
+// ============================================================================
+
+// mapStats is Map statistics.
+//
+// Notes:
+//   - map statistics are intended to be used for diagnostic
+//     purposes, not for production code. This means that breaking changes
+//     may be introduced into this struct even between minor releases.
+type mapStats struct {
+	// RootBuckets is the number of root buckets in the hash table.
+	// Each bucket holds a few entries.
+	RootBuckets int
+	// TotalBuckets is the total number of buckets in the hash table,
+	// including root and their chained buckets. Each bucket holds
+	// a few entries.
+	TotalBuckets int
+	// EmptyBuckets is the number of buckets that hold no entries.
+	EmptyBuckets int
+	// Capacity is the Map capacity, i.e., the total number of
+	// entries that all buckets can physically hold. This number
+	// does not consider the load factor.
+	Capacity int
+	// Size is the exact number of entries stored in the map.
+	Size int
+	// Counter is the number of entries stored in the map according
+	// to the internal atomic counter. In the case of concurrent map
+	// modifications, this number may be different from Size.
+	Counter int
+	// CounterLen is the number of internal atomic counter stripes.
+	// This number may grow with the map capacity to improve
+	// multithreaded scalability.
+	CounterLen int
+	// MinEntries is the minimum number of entries per a chain of
+	// buckets, i.e., a root bucket and its chained buckets.
+	MinEntries int
+	// MinEntries is the maximum number of entries per a chain of
+	// buckets, i.e., a root bucket and its chained buckets.
+	MaxEntries int
+	// TotalGrowths is the number of times the hash table grew.
+	TotalGrowths uint32
+	// TotalGrowths is the number of times the hash table shrunk.
+	TotalShrinks uint32
+}
+
+// String returns string representation of map stats.
+func (s *mapStats) String() string {
+	var sb strings.Builder
+	sb.WriteString("mapStats{\n")
+	sb.WriteString(fmt.Sprintf("RootBuckets:  %d\n", s.RootBuckets))
+	sb.WriteString(fmt.Sprintf("TotalBuckets: %d\n", s.TotalBuckets))
+	sb.WriteString(fmt.Sprintf("EmptyBuckets: %d\n", s.EmptyBuckets))
+	sb.WriteString(fmt.Sprintf("Capacity:     %d\n", s.Capacity))
+	sb.WriteString(fmt.Sprintf("Size:         %d\n", s.Size))
+	sb.WriteString(fmt.Sprintf("Counter:      %d\n", s.Counter))
+	sb.WriteString(fmt.Sprintf("CounterLen:   %d\n", s.CounterLen))
+	sb.WriteString(fmt.Sprintf("MinEntries:   %d\n", s.MinEntries))
+	sb.WriteString(fmt.Sprintf("MaxEntries:   %d\n", s.MaxEntries))
+	sb.WriteString(fmt.Sprintf("TotalGrowths: %d\n", s.TotalGrowths))
+	sb.WriteString(fmt.Sprintf("TotalShrinks: %d\n", s.TotalShrinks))
+	sb.WriteString("}\n")
+	return sb.String()
+}
+
+// stats returns statistics for the Map. Just like other map
+// methods, this one is thread-safe. Yet it's an O(N) operation,
+// so it should be used only for diagnostics or debugging purposes.
+func (m *Map[K, V]) stats() *mapStats {
+	stats := &mapStats{
+		TotalGrowths: LoadInt(&m.growths),
+		TotalShrinks: LoadInt(&m.shrinks),
+		MinEntries:   math.MaxInt,
+	}
+	table := (*mapTable)(LoadPtr(&m.table))
+	if table == nil {
+		return stats
+	}
+	stats.RootBuckets = table.mask + 1
+	stats.Counter = table.SumSize()
+	stats.CounterLen = table.sizeMask + 1
+	for i := 0; i <= table.mask; i++ {
+		entries := 0
+		for b := table.buckets.At(i); b != nil; b = (*bucket)(LoadPtr(&b.next)) {
+			stats.TotalBuckets++
+			entriesLocal := 0
+			stats.Capacity += entriesPerBucket
+
+			meta := LoadInt(&b.meta)
+			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+				j := firstMarkedByteIndex(marked)
+				if e := (*Entry_[K, V])(LoadPtr(b.At(j))); e != nil {
+					stats.Size++
+					entriesLocal++
+				}
+			}
+			entries += entriesLocal
+			if entriesLocal == 0 {
+				stats.EmptyBuckets++
+			}
+		}
+
+		if entries < stats.MinEntries {
+			stats.MinEntries = entries
+		}
+		if entries > stats.MaxEntries {
+			stats.MaxEntries = entries
+		}
+	}
+	return stats
+}
+
+// ============================================================================
+// Test Data
+// ============================================================================
+
 var (
 	testDataSmall [8]string
 	testData      [128]string
@@ -180,23 +296,6 @@ func TestMap_Compute_Basic(t *testing.T) {
 	}
 	if v, loaded := m.Load("k4"); !loaded || v != 7 {
 		t.Fatalf("Load after Compute cancel v=%d ok=%v", v, loaded)
-	}
-}
-
-func TestMap_String_Format(t *testing.T) {
-	var m Map[string, int]
-	if s := m.String(); s != "Map[]" {
-		t.Fatalf("empty String=%s", s)
-	}
-
-	m.Store("a", 1)
-	m.Store("b", 2)
-	s := m.String()
-	if !strings.HasPrefix(s, "Map[") {
-		t.Fatalf("prefix=%s", s)
-	}
-	if !strings.Contains(s, "a:1") || !strings.Contains(s, "b:2") {
-		t.Fatalf("contents=%s", s)
 	}
 }
 
