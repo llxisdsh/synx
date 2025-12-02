@@ -91,7 +91,7 @@ func (sl *seqlock[SEQ, T]) WriteLocked(slot *seqlockSlot[T], v T) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) BeginRead() (s1 SEQ, ok bool) {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		s1 = SEQ(atomic.LoadUint32((*uint32)(unsafe.Pointer(&sl.seq))))
 		return s1, s1&1 == 0
 	} else {
@@ -104,7 +104,7 @@ func (sl *seqlock[SEQ, T]) BeginRead() (s1 SEQ, ok bool) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) EndRead(s1 SEQ) (ok bool) {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		s2 := SEQ(atomic.LoadUint32((*uint32)(unsafe.Pointer(&sl.seq))))
 		return s1 == s2
 	} else {
@@ -118,7 +118,7 @@ func (sl *seqlock[SEQ, T]) EndRead(s1 SEQ) (ok bool) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) BeginWrite() (s1 SEQ, ok bool) {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		s1 = SEQ(atomic.LoadUint32((*uint32)(unsafe.Pointer(&sl.seq))))
 		if s1&1 != 0 {
 			return s1, false
@@ -137,7 +137,7 @@ func (sl *seqlock[SEQ, T]) BeginWrite() (s1 SEQ, ok bool) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) EndWrite(s1 SEQ) {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		atomic.StoreUint32((*uint32)(unsafe.Pointer(&sl.seq)), uint32(s1)+2)
 	} else {
 		atomic.StoreUint64((*uint64)(unsafe.Pointer(&sl.seq)), uint64(s1)+2)
@@ -149,7 +149,7 @@ func (sl *seqlock[SEQ, T]) EndWrite(s1 SEQ) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) BeginWriteLocked() {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 1)
 	} else {
 		atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 1)
@@ -161,7 +161,7 @@ func (sl *seqlock[SEQ, T]) BeginWriteLocked() {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) EndWriteLocked() {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 1)
 	} else {
 		atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 1)
@@ -172,7 +172,7 @@ func (sl *seqlock[SEQ, T]) EndWriteLocked() {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
-	if unsafe.Sizeof(SEQ(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(SEQ(0)) == 4 {
 		s1 := SEQ(atomic.LoadUint32((*uint32)(unsafe.Pointer(&sl.seq))))
 		return s1 != 0 && s1&1 == 0
 	} else {

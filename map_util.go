@@ -51,10 +51,10 @@ const (
 	entriesPerBucket = min(opByteIdx, (maxBucketBytes-bucketOverhead)/pointerSize)
 
 	// Metadata constants for bucket entry management
-	emptyMeta uint64 = 0
+	metaEmpty uint64 = 0
 	metaMask  uint64 = 0x8080808080808080 >>
 		(64 - min(entriesPerBucket*8, 64))
-	emptySlot uint8 = 0
+	slotEmpty uint8 = 0
 	slotMask  uint8 = 0x80
 )
 
@@ -72,6 +72,11 @@ const (
 	asyncThreshold = 128 * 1024
 	// resizeOverPartition: over-partition factor to reduce resize tail latency
 	resizeOverPartition = 8
+)
+
+const (
+	intSize = 32 << (^uint(0) >> 63) // 32 or 64
+	maxInt  = 1<<(intSize-1) - 1     // MaxInt32 or MaxInt64 depending on intSize.
 )
 
 // Feature flags for performance optimization
@@ -174,7 +179,7 @@ func nextPowOf2(n int) int {
 	v |= v >> 4
 	v |= v >> 8
 	v |= v >> 16
-	if bits.UintSize >= 64 {
+	if intSize == 64 {
 		v |= v >> 32
 	}
 	return v + 1
@@ -448,7 +453,7 @@ func defaultHasher[K comparable, V any]() (
 	case uint, int, uintptr:
 		return hashUintptr, valEqual, true
 	case uint64, int64:
-		if bits.UintSize >= 64 {
+		if intSize == 64 {
 			return hashUint64, valEqual, true
 		} else {
 			return hashUint64On32Bit, valEqual, true
@@ -474,7 +479,7 @@ func defaultHasher[K comparable, V any]() (
 		case reflect.Uint, reflect.Int, reflect.Uintptr:
 			return hashUintptr, valEqual, true
 		case reflect.Int64, reflect.Uint64:
-			if bits.UintSize >= 64 {
+			if intSize == 64 {
 				return hashUint64, valEqual, true
 			} else {
 				return hashUint64On32Bit, valEqual, true

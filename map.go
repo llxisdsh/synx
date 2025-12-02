@@ -1,7 +1,6 @@
 package synx
 
 import (
-	"math"
 	"math/rand/v2"
 	"runtime"
 	"sync"
@@ -566,12 +565,12 @@ func (m *Map[K, V]) Compute(
 	hash := m.keyHash(noescape(unsafe.Pointer(&key)), m.seed)
 	return m.computeEntry_(table, hash, &key,
 		func(e *Entry_[K, V]) (*Entry_[K, V], V, bool) {
-			it := &Entry[K, V]{entry: Entry_[K, V]{Key: key}}
+			it := Entry[K, V]{entry: Entry_[K, V]{Key: key}}
 			if e != nil {
 				it.entry = *e
 				it.loaded = true
 			}
-			fn(noEscape(it))
+			fn(noEscape(&it))
 			switch it.op {
 			case updateOp:
 				return &Entry_[K, V]{Value: it.entry.Value}, it.entry.Value, it.loaded
@@ -627,11 +626,11 @@ func (m *Map[K, V]) ComputeRange(
 	fn func(e *Entry[K, V]) bool,
 	blockWriters ...bool,
 ) {
-	it := &Entry[K, V]{loaded: true}
+	it := Entry[K, V]{loaded: true}
 	m.computeRangeEntry_(func(e *Entry_[K, V]) (*Entry_[K, V], bool) {
 		it.entry = *e
 		it.op = cancelOp
-		shouldContinue := fn(noEscape(it))
+		shouldContinue := fn(noEscape(&it))
 		switch it.op {
 		case updateOp:
 			return &Entry_[K, V]{Value: it.entry.Value}, shouldContinue
@@ -764,7 +763,7 @@ func (m *Map[K, V]) doResize(
 
 // ToMap collect up to limit entries into a map[K]V, limit < 0 is no limit
 func (m *Map[K, V]) ToMap(limit ...int) map[K]V {
-	l := math.MaxInt
+	l := maxInt
 	if len(limit) != 0 {
 		l = limit[0]
 		if l <= 0 {
@@ -936,13 +935,14 @@ func (m *Map[K, V]) computeEntry_(
 		}
 
 		var (
-			oldEntry *Entry_[K, V]
-			oldB     *bucket
-			oldIdx   int
-			oldMeta  uint64
-			emptyB   *bucket
-			emptyIdx int
-			lastB    *bucket
+			oldEntry  *Entry_[K, V]
+			oldB      *bucket
+			oldIdx    int
+			oldMeta   uint64
+			emptyB    *bucket
+			emptyIdx  int
+			emptyMeta uint64
+			lastB     *bucket
 		)
 
 	findLoop:
@@ -968,6 +968,7 @@ func (m *Map[K, V]) computeEntry_(
 				if empty := (^meta) & metaMask; empty != 0 {
 					emptyB = b
 					emptyIdx = firstMarkedByteIndex(empty)
+					emptyMeta = meta
 				}
 			}
 			lastB = b
@@ -997,7 +998,7 @@ func (m *Map[K, V]) computeEntry_(
 			}
 			// Delete
 			StorePtr(oldB.At(oldIdx), nil)
-			newMeta := setByte(oldMeta, emptySlot, oldIdx)
+			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
 			if oldB == root {
 				root.UnlockWithMeta(newMeta)
 			} else {
@@ -1007,7 +1008,7 @@ func (m *Map[K, V]) computeEntry_(
 			table.AddSize(idx, -1)
 
 			// Check if table shrinking is needed
-			if m.shrinkOn && newMeta&metaDataMask == emptyMeta &&
+			if m.shrinkOn && newMeta&metaDataMask == metaEmpty &&
 				LoadPtr(&m.rs) == nil {
 				tableLen := table.mask + 1
 				if m.minLen < tableLen {
@@ -1037,7 +1038,7 @@ func (m *Map[K, V]) computeEntry_(
 			// and this reduces the window where meta is visible but pointer is
 			// still nil
 			StorePtr(emptyB.At(emptyIdx), unsafe.Pointer(newEntry))
-			newMeta := setByte(LoadIntFast(&emptyB.meta), h2v, emptyIdx)
+			newMeta := setByte(emptyMeta, h2v, emptyIdx)
 			if emptyB == root {
 				root.UnlockWithMeta(newMeta)
 			} else {
@@ -1050,7 +1051,7 @@ func (m *Map[K, V]) computeEntry_(
 
 		// No empty slot, create new bucket and insert
 		StorePtr(&lastB.next, unsafe.Pointer(&bucket{
-			meta: setByte(emptyMeta, h2v, 0),
+			meta: setByte(metaEmpty, h2v, 0),
 			entries: [entriesPerBucket]unsafe.Pointer{
 				unsafe.Pointer(newEntry),
 			},
@@ -1165,7 +1166,7 @@ func (m *Map[K, V]) computeRangeEntry_(
 							}
 						} else {
 							StorePtr(b.At(j), nil)
-							meta = setByte(meta, emptySlot, j)
+							meta = setByte(meta, slotEmpty, j)
 							StoreInt(&b.meta, meta)
 							table.AddSize(i, -1)
 						}
@@ -1366,7 +1367,7 @@ func (m *Map[K, V]) copyBucket(
 						next := (*bucket)(b.next)
 						if next == nil {
 							b.next = unsafe.Pointer(&bucket{
-								meta:    setByte(emptyMeta, h2v, 0),
+								meta:    setByte(metaEmpty, h2v, 0),
 								entries: [entriesPerBucket]unsafe.Pointer{unsafe.Pointer(e)},
 							})
 							break appendToBucket

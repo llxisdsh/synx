@@ -34,92 +34,6 @@ func mixRand(i int) int {
 
 // ------------------------------------------------------
 
-func BenchmarkStore_pb_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	var m synx.Map[int, int]
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			m.Store(i, i)
-			i++
-			if i >= countStore {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkLoadOrStore_pb_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	var m synx.Map[int, int]
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			_, _ = m.LoadOrStore(i, i)
-			i++
-			if i >= countLoadOrStore {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkLoad_pb_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	var m synx.Map[int, int]
-	for i := 0; i < countLoad; i++ {
-		m.Store(i, i)
-	}
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			_, _ = m.Load(i)
-			i++
-			if i >= countLoad {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkMixed_pb_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	var m synx.Map[int, int]
-	for i := 0; i < countLoad; i++ {
-		m.Store(i, i)
-	}
-	runtime.GC()
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			switch mixRand(i) {
-			case 0:
-				m.Store(i, i)
-			case 1:
-				m.Delete(i)
-			case 2:
-				_, _ = m.LoadOrStore(i, i)
-			default:
-				_, _ = m.Load(i)
-			}
-			i++
-			if i >= countLoad<<1 {
-				i = 0
-			}
-		}
-	})
-}
-
-// ------------------------------------------------------
-
 func BenchmarkStore_pb_FlatMapOf(b *testing.B) {
 	b.ReportAllocs()
 	m := synx.NewFlatMap[int, int]()
@@ -177,6 +91,92 @@ func BenchmarkLoad_pb_FlatMapOf(b *testing.B) {
 func BenchmarkMixed_pb_FlatMapOf(b *testing.B) {
 	b.ReportAllocs()
 	m := synx.NewFlatMap[int, int]()
+	for i := 0; i < countLoad; i++ {
+		m.Store(i, i)
+	}
+	runtime.GC()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			switch mixRand(i) {
+			case 0:
+				m.Store(i, i)
+			case 1:
+				m.Delete(i)
+			case 2:
+				_, _ = m.LoadOrStore(i, i)
+			default:
+				_, _ = m.Load(i)
+			}
+			i++
+			if i >= countLoad<<1 {
+				i = 0
+			}
+		}
+	})
+}
+
+// ------------------------------------------------------
+
+func BenchmarkStore_pb_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	var m synx.Map[int, int]
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.Store(i, i)
+			i++
+			if i >= countStore {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkLoadOrStore_pb_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	var m synx.Map[int, int]
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.LoadOrStore(i, i)
+			i++
+			if i >= countLoadOrStore {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkLoad_pb_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	var m synx.Map[int, int]
+	for i := 0; i < countLoad; i++ {
+		m.Store(i, i)
+	}
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.Load(i)
+			i++
+			if i >= countLoad {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkMixed_pb_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	var m synx.Map[int, int]
 	for i := 0; i < countLoad; i++ {
 		m.Store(i, i)
 	}

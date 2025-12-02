@@ -29,7 +29,7 @@ func StorePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 //
 //go:nosplit
 func LoadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
-	if unsafe.Sizeof(T(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(T(0)) == 4 {
 		return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
 	} else {
 		return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
@@ -40,7 +40,7 @@ func LoadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 //
 //go:nosplit
 func StoreInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
-	if unsafe.Sizeof(T(0)) == unsafe.Sizeof(uint32(0)) {
+	if unsafe.Sizeof(T(0)) == 4 {
 		atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
 	} else {
 		atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
