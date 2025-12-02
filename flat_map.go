@@ -169,10 +169,21 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	idx := table.mask & h1(hash, m.intKey)
 	root := table.buckets.At(idx)
 	for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
+		var spins int
+	retry:
+		s1, ok := b.seq.BeginRead()
+		if !ok {
+			delay(&spins)
+			goto retry
+		}
 		meta := atomic.LoadUint64(&b.meta)
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
-			e := b.seq.Read(b.At(j))
+			e := b.At(j).ReadUnfenced()
+			ok = b.seq.EndRead(s1)
+			if !ok {
+				goto retry
+			}
 			if EmbeddedHash_ {
 				if e.GetHash() == hash && e.Key == key {
 					return e.Value, true

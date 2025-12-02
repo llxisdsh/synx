@@ -30,19 +30,21 @@ type seqlock[SEQ ~uint32 | ~uint64 | ~uintptr, T any] struct {
 }
 
 // Read atomically loads a tear-free snapshot using the external seqlock.
-// Spins until seq is even and unchanged across two reads; copies the value
-// within the stable window.
 func (sl *seqlock[SEQ, T]) Read(slot *seqlockSlot[T]) (v T) {
-	if s1, ok := sl.BeginRead(); ok {
-		v = slot.ReadUnfenced()
-		if ok = sl.EndRead(s1); ok {
-			return v
+	for {
+		if s1, ok := sl.BeginRead(); ok {
+			v = slot.ReadUnfenced()
+			if ok = sl.EndRead(s1); ok {
+				return v
+			}
 		}
 	}
-	return sl.slowRead(slot)
 }
 
-func (sl *seqlock[SEQ, T]) slowRead(slot *seqlockSlot[T]) (v T) {
+// ColdRead atomically loads a tear-free snapshot using the external seqlock.
+// Spins until seq is even and unchanged across two reads; copies the value
+// within the stable window.
+func (sl *seqlock[SEQ, T]) ColdRead(slot *seqlockSlot[T]) (v T) {
 	var spins int
 	for {
 		if s1, ok := sl.BeginRead(); ok {
@@ -58,15 +60,18 @@ func (sl *seqlock[SEQ, T]) slowRead(slot *seqlockSlot[T]) (v T) {
 // Write publishes v guarded by the external seqlock.
 // Enters odd, copies v, then exits to even to publish a stable snapshot.
 func (sl *seqlock[SEQ, T]) Write(slot *seqlockSlot[T], v T) {
-	if s1, ok := sl.BeginWrite(); ok {
-		slot.WriteUnfenced(v)
-		sl.EndWrite(s1)
-		return
+	for {
+		if s1, ok := sl.BeginWrite(); ok {
+			slot.WriteUnfenced(v)
+			sl.EndWrite(s1)
+			return
+		}
 	}
-	sl.slowWrite(slot, v)
 }
 
-func (sl *seqlock[SEQ, T]) slowWrite(slot *seqlockSlot[T], v T) {
+// ColdWrite publishes v guarded by the external seqlock.
+// Spins until seq is odd; copies v, then exits to even to publish a stable snapshot.
+func (sl *seqlock[SEQ, T]) ColdWrite(slot *seqlockSlot[T], v T) {
 	var spins int
 	for {
 		if s1, ok := sl.BeginWrite(); ok {
