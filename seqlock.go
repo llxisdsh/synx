@@ -204,6 +204,8 @@ type seqlockSlot[T any] struct {
 // alignment and size permit on weak memory models to avoid reordering;
 // otherwise falls back to a typed copy.
 // Must be called under a lock or within a seqlock-stable window.
+//
+//go:nosplit
 func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 	if IsTSO_ {
 		return slot.buf
@@ -261,6 +263,8 @@ func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 // This preserves Go's GC write barriers and avoids publishing pointers
 // through uintptr/unsafe atomic stores.
 // Must be called under a lock or within a seqlock-stable window.
+//
+//go:nosplit
 func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
 	slot.buf = v
 }

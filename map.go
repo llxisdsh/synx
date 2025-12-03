@@ -1416,8 +1416,6 @@ func (t *mapTable) SumSize() int {
 // Lock acquires a spinlock for the bucket using embedded metadata.
 // Uses atomic operations on the meta field to avoid false sharing overhead.
 // Implements optimistic locking with fallback to spinning.
-//
-//go:nosplit
 func (b *bucket) Lock() {
 	cur := LoadInt(&b.meta)
 	if atomic.CompareAndSwapUint64(&b.meta, cur&(^opLockMask), cur|opLockMask) {
@@ -1426,7 +1424,6 @@ func (b *bucket) Lock() {
 	b.slowLock()
 }
 
-//go:nosplit
 func (b *bucket) slowLock() {
 	var spins int
 	for !b.tryLock() {

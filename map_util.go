@@ -121,6 +121,8 @@ const (
 // Returns:
 //   - chunks: Suggested degree of parallelism (number of goroutines).
 //   - chunkSz: Number of items processed per goroutine
+//
+//go:nosplit
 func calcParallelism(items, threshold, cpus int) (chunkSz, chunks int) {
 	// If the items are too small, use single-threaded processing.
 	// Adjusts the parallel process trigger threshold using a scaling factor.
@@ -138,6 +140,8 @@ func calcParallelism(items, threshold, cpus int) (chunkSz, chunks int) {
 
 // calcTableLen computes the bucket count for the table
 // return value must be a power of 2
+//
+//go:nosplit
 func calcTableLen(capacity int) int {
 	tableLen := minTableLen
 	const minThreshold = int(float64(minTableLen*entriesPerBucket) * loadFactor)
@@ -154,6 +158,8 @@ func calcTableLen(capacity int) int {
 
 // calcSizeLen computes the size count for the table
 // return value must be a power of 2
+//
+//go:nosplit
 func calcSizeLen(tableLen, cpus int) int {
 	return nextPowOf2(min(cpus, tableLen>>10))
 }
@@ -161,6 +167,8 @@ func calcSizeLen(tableLen, cpus int) int {
 // nextPowOf2 calculates the smallest power of 2 that is greater than or equal
 // to n.
 // Compatible with both 32-bit and 64-bit systems.
+//
+//go:nosplit
 func nextPowOf2(n int) int {
 	if n <= 0 {
 		return 1
@@ -353,7 +361,6 @@ func trySpin(spins *int) bool {
 	return false
 }
 
-//go:nosplit
 func delay(spins *int) {
 	if trySpin(spins) {
 		return
