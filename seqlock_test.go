@@ -29,7 +29,7 @@ func TestSeqlock_NoTornRead(t *testing.T) {
 	for i := range v0.X {
 		v0.X[i] = x0 + uint64(i)
 	}
-	sl.ColdWrite(&a, v0)
+	sl.Write(&a, v0)
 
 	var errors atomic.Int64
 	stop := make(chan struct{})
@@ -52,7 +52,7 @@ func TestSeqlock_NoTornRead(t *testing.T) {
 					for i := range v.X {
 						v.X[i] = x + uint64(i)
 					}
-					sl.ColdWrite(&a, v)
+					sl.Write(&a, v)
 					runtime.Gosched()
 				}
 			}
@@ -68,7 +68,7 @@ func TestSeqlock_NoTornRead(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.ColdRead(&a)
+					v := sl.Read(&a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -102,7 +102,7 @@ func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 	for i := range v0.X {
 		v0.X[i] = x0 + uint64(i)
 	}
-	sl.ColdWrite(&a, v0)
+	sl.Write(&a, v0)
 
 	var errors atomic.Int64
 	stop := make(chan struct{})
@@ -125,7 +125,7 @@ func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 					for i := range v.X {
 						v.X[i] = x + uint64(i)
 					}
-					sl.ColdWrite(&a, v)
+					sl.Write(&a, v)
 					runtime.Gosched()
 				}
 			}
@@ -142,7 +142,7 @@ func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.ColdRead(&a)
+					v := sl.Read(&a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -183,7 +183,7 @@ func TestSeqlock_AddStyleWriterProducesTornReads(t *testing.T) {
 	for i := range v0.X {
 		v0.X[i] = x0 + uint64(i)
 	}
-	sl.ColdWrite(&a, v0)
+	sl.Write(&a, v0)
 
 	var errors atomic.Int64
 	stop := make(chan struct{})
@@ -224,7 +224,7 @@ func TestSeqlock_AddStyleWriterProducesTornReads(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.ColdRead(&a)
+					v := sl.Read(&a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -259,7 +259,7 @@ func TestSeqlock_AddStyleWriterWithLock_NoTornRead(t *testing.T) {
 	for i := range v0.X {
 		v0.X[i] = x0 + uint64(i)
 	}
-	sl.ColdWrite(&a, v0)
+	sl.Write(&a, v0)
 
 	var errors atomic.Int64
 	stop := make(chan struct{})
@@ -302,7 +302,7 @@ func TestSeqlock_AddStyleWriterWithLock_NoTornRead(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.ColdRead(&a)
+					v := sl.Read(&a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
