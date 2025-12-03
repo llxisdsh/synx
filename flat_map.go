@@ -386,9 +386,9 @@ func (m *FlatMap[K, V]) Compute(
 			}
 			// insert new
 			if emptyB != nil {
+				newMeta := setByte(emptyMeta, h2v, emptyIdx)
 				emptyB.seq.BeginWriteLocked()
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
-				newMeta := setByte(emptyMeta, h2v, emptyIdx)
 				atomic.StoreUint64(&emptyB.meta, newMeta)
 				emptyB.seq.EndWriteLocked()
 
@@ -420,11 +420,12 @@ func (m *FlatMap[K, V]) Compute(
 				root.Unlock()
 				return it.entry.Value, it.loaded
 			}
+			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
 			oldB.seq.BeginWriteLocked()
 			oldB.At(oldIdx).WriteUnfenced(Entry_[K, V]{})
-			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
 			atomic.StoreUint64(&oldB.meta, newMeta)
 			oldB.seq.EndWriteLocked()
+
 			root.Unlock()
 			table.AddSize(idx, -1)
 			// Check if table shrinking is needed
@@ -552,11 +553,12 @@ func (m *FlatMap[K, V]) ComputeRange(
 					case updateOp:
 						b.seq.WriteLocked(e, it.entry)
 					case deleteOp:
+						meta = setByte(meta, slotEmpty, j)
 						b.seq.BeginWriteLocked()
 						e.WriteUnfenced(Entry_[K, V]{})
-						meta = setByte(meta, slotEmpty, j)
 						atomic.StoreUint64(&b.meta, meta)
 						b.seq.EndWriteLocked()
+
 						table.AddSize(i, -1)
 					default:
 						// cancelOp: No-op
