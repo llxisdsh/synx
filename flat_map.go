@@ -493,8 +493,6 @@ func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 
 // All returns an iterator function for use with range-over-func.
 // It provides the same functionality as Range but in iterator form.
-//
-//go:nosplit
 func (m *FlatMap[K, V]) All() func(yield func(K, V) bool) {
 	return m.Range
 }
@@ -576,8 +574,6 @@ func (m *FlatMap[K, V]) ComputeRange(
 
 // Entries returns an iterator function for use with range-over-func.
 // It provides the same functionality as ComputeRange but in iterator form.
-//
-//go:nosplit
 func (m *FlatMap[K, V]) Entries(
 	blockWriters ...bool,
 ) func(yield func(e *Entry[K, V]) bool) {
@@ -589,8 +585,6 @@ func (m *FlatMap[K, V]) Entries(
 // Size returns the number of key-value pairs in the map.
 // This operation sums counters across all size stripes for an approximate
 // count.
-//
-//go:nosplit
 func (m *FlatMap[K, V]) Size() int {
 	table := m.tableSeq.Read(&m.table)
 	if table.buckets.ptr == nil {

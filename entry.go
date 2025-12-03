@@ -16,37 +16,27 @@ type Entry[K comparable, V any] struct {
 }
 
 // Key returns the entry's key.
-//
-//go:nosplit
 func (e *Entry[K, V]) Key() K {
 	return e.entry.Key
 }
 
 // Value returns the entry's value. Returns zero value if not loaded.
-//
-//go:nosplit
 func (e *Entry[K, V]) Value() V {
 	return e.entry.Value
 }
 
 // Loaded reports whether the entry exists in the map.
-//
-//go:nosplit
 func (e *Entry[K, V]) Loaded() bool {
 	return e.loaded
 }
 
 // Update sets the entry's value. Inserts it if not loaded, replaces if loaded.
-//
-//go:nosplit
 func (e *Entry[K, V]) Update(value V) {
 	e.entry.Value = value
 	e.op = updateOp
 }
 
 // Delete marks the entry for removal and clears its value.
-//
-//go:nosplit
 func (e *Entry[K, V]) Delete() {
 	e.entry.Value = *new(V)
 	e.op = deleteOp
