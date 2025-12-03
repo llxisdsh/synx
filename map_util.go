@@ -351,7 +351,6 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
-//go:nosplit
 func trySpin(spins *int) bool {
 	if runtime_canSpin(*spins) {
 		*spins++
@@ -377,14 +376,12 @@ func delay(spins *int) {
 // nolint:all
 //
 //go:linkname runtime_canSpin sync.runtime_canSpin
-//go:nosplit
 //goland:noinspection ALL
 func runtime_canSpin(i int) bool
 
 // nolint:all
 //
 //go:linkname runtime_doSpin sync.runtime_doSpin
-//go:nosplit
 //goland:noinspection ALL
 func runtime_doSpin()
 
