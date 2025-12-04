@@ -121,14 +121,14 @@ func (m *FlatMap[K, V]) init(
 
 //go:noinline
 func (m *FlatMap[K, V]) slowInit() {
-	rs := (*flatRebuildState[K, V])(atomic.LoadPointer(&m.rs))
+	rs := (*flatRebuildState[K, V])(LoadPtr(&m.rs))
 	if rs != nil {
 		rs.wg.Wait()
 		return
 	}
 	rs, ok := m.beginRebuild(mapRebuildBlockWritersHint)
 	if !ok {
-		rs = (*flatRebuildState[K, V])(atomic.LoadPointer(&m.rs))
+		rs = (*flatRebuildState[K, V])(LoadPtr(&m.rs))
 		if rs != nil {
 			rs.wg.Wait()
 		}
@@ -163,7 +163,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	h2w := broadcast(h2v)
 	idx := table.mask & h1(hash, m.intKey)
 	root := table.buckets.At(idx)
-	for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
+	for b := root; b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
 		var spins int
 	retry:
 		s1, ok := b.seq.BeginRead()
@@ -171,7 +171,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 			delay(&spins)
 			goto retry
 		}
-		meta := atomic.LoadUint64(&b.meta)
+		meta := LoadIntInWindow(&b.meta)
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
 			e := b.At(j).ReadUnfenced()
@@ -326,7 +326,7 @@ func (m *FlatMap[K, V]) Compute(
 		root.Lock()
 
 		// Help finishing rebuild if needed
-		if rs := (*flatRebuildState[K, V])(atomic.LoadPointer(&m.rs)); rs != nil {
+		if rs := (*flatRebuildState[K, V])(LoadPtr(&m.rs)); rs != nil {
 			switch rs.hint {
 			case mapGrowHint, mapShrinkHint:
 				if rs.newTableSeq.WriteCompleted() {
@@ -404,9 +404,9 @@ func (m *FlatMap[K, V]) Compute(
 			// Reader won't access slot until meta is published with valid h2.
 			// StoreBarrier ensures Entry is visible before meta update on ARM.
 			if emptyB != nil {
-				newMeta := setByte(emptyMeta, h2v, emptyIdx)
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
-				emptyB.seq.StoreBarrier()
+				//emptyB.seq.WriteBarrier()
+				newMeta := setByte(emptyMeta, h2v, emptyIdx)
 				atomic.StoreUint64(&emptyB.meta, newMeta)
 
 				root.Unlock()
@@ -423,7 +423,7 @@ func (m *FlatMap[K, V]) Compute(
 			root.Unlock()
 			table.AddSize(idx, 1)
 			// Auto-grow check (parallel resize)
-			if atomic.LoadPointer(&m.rs) == nil {
+			if LoadPtr(&m.rs) == nil {
 				tableLen := table.mask + 1
 				size := table.SumSize()
 				const capFactor = float64(entriesPerBucket) * loadFactor
@@ -449,7 +449,7 @@ func (m *FlatMap[K, V]) Compute(
 			table.AddSize(idx, -1)
 			// Check if table shrinking is needed
 			if m.shrinkOn && newMeta&metaDataMask == metaEmpty &&
-				atomic.LoadPointer(&m.rs) == nil {
+				LoadPtr(&m.rs) == nil {
 				tableLen := table.mask + 1
 				if minTableLen < tableLen {
 					size := table.SumSize()
@@ -484,11 +484,11 @@ func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 	var cacheCount int
 	for i := 0; i <= table.mask; i++ {
 		root := table.buckets.At(i)
-		for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
+		for b := root; b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
 			var spins int
 			for {
 				if s1, ok := b.seq.BeginRead(); ok {
-					meta = atomic.LoadUint64(&b.meta)
+					meta = LoadIntInWindow(&b.meta)
 					cacheCount = 0
 					for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 						j := firstMarkedByteIndex(marked)
@@ -671,7 +671,7 @@ func (m *FlatMap[K, V]) rebuild(
 ) {
 	for {
 		// Help finishing rebuild if needed
-		if rs := (*flatRebuildState[K, V])(atomic.LoadPointer(&m.rs)); rs != nil {
+		if rs := (*flatRebuildState[K, V])(LoadPtr(&m.rs)); rs != nil {
 			switch rs.hint {
 			case mapGrowHint, mapShrinkHint:
 				if rs.newTableSeq.WriteCompleted() {
@@ -875,7 +875,7 @@ func (t *flatTable[K, V]) AddSize(idx, delta int) {
 func (t *flatTable[K, V]) SumSize() int {
 	var sum uintptr
 	for i := 0; i <= t.sizeMask; i++ {
-		sum += atomic.LoadUintptr(&t.size.At(i).C)
+		sum += LoadInt(&t.size.At(i).C)
 	}
 	return int(sum)
 }

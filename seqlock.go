@@ -184,12 +184,12 @@ func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
 	}
 }
 
-// StoreBarrier emits a full memory barrier on weak memory models (ARM, etc.)
+// WriteBarrier emits a full memory barrier on weak memory models (ARM, etc.)
 // without entering the odd state. On TSO architectures (x86), this is a no-op.
 // Use this before publishing via atomic store when seqlock window is not needed.
 //
 //go:nosplit
-func (sl *seqlock[SEQ, T]) StoreBarrier() {
+func (sl *seqlock[SEQ, T]) WriteBarrier() {
 	if IsTSO_ {
 		return
 	}

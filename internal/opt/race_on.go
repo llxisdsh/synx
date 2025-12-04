@@ -60,3 +60,9 @@ func LoadIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 func StoreIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
 	StoreInt(addr, val)
 }
+
+// LoadIntInWindow loads without barrier when inside a seqlock window.
+// Consistency is guaranteed by seqlock retry.
+func LoadIntInWindow[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
+	return LoadInt(addr)
+}
