@@ -407,14 +407,14 @@ func (m *FlatMap[K, V]) Compute(
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
 				//emptyB.seq.WriteBarrier()
 				newMeta := setByte(emptyMeta, h2v, emptyIdx)
-				atomic.StoreUint64(&emptyB.meta, newMeta)
+				StoreInt(&emptyB.meta, newMeta)
 
 				root.Unlock()
 				table.AddSize(idx, 1)
 				return it.entry.Value, it.loaded
 			}
 			// append new bucket
-			atomic.StorePointer(&lastB.next, unsafe.Pointer(&flatBucket[K, V]{
+			StorePtr(&lastB.next, unsafe.Pointer(&flatBucket[K, V]{
 				meta: setByte(emptyMeta, h2v, 0),
 				entries: [entriesPerBucket]seqlockSlot[Entry_[K, V]]{
 					{buf: it.entry},
@@ -440,7 +440,7 @@ func (m *FlatMap[K, V]) Compute(
 			// Delete: update meta first so new Readers skip this slot immediately.
 			// Active Readers will see seq change and retry, then see h2=0.
 			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
-			atomic.StoreUint64(&oldB.meta, newMeta)
+			StoreInt(&oldB.meta, newMeta)
 			oldB.seq.BeginWriteLocked()
 			oldB.At(oldIdx).WriteUnfenced(Entry_[K, V]{})
 			oldB.seq.EndWriteLocked()
@@ -575,7 +575,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 						b.seq.EndWriteLocked()
 					case deleteOp:
 						meta = setByte(meta, slotEmpty, j)
-						atomic.StoreUint64(&b.meta, meta)
+						StoreInt(&b.meta, meta)
 						b.seq.BeginWriteLocked()
 						e.WriteUnfenced(Entry_[K, V]{})
 						b.seq.EndWriteLocked()
@@ -889,7 +889,7 @@ func (b *flatBucket[K, V]) At(i int) *seqlockSlot[Entry_[K, V]] {
 }
 
 func (b *flatBucket[K, V]) Lock() {
-	cur := atomic.LoadUint64(&b.meta)
+	cur := LoadInt(&b.meta)
 	if atomic.CompareAndSwapUint64(&b.meta, cur&(^opLockMask), cur|opLockMask) {
 		return
 	}
@@ -906,7 +906,7 @@ func (b *flatBucket[K, V]) slowLock() {
 //go:nosplit
 func (b *flatBucket[K, V]) tryLock() bool {
 	for {
-		cur := atomic.LoadUint64(&b.meta)
+		cur := LoadInt(&b.meta)
 		if cur&opLockMask != 0 {
 			return false
 		}
