@@ -405,7 +405,7 @@ func (m *FlatMap[K, V]) Compute(
 			// StoreBarrier ensures Entry is visible before meta update on ARM.
 			if emptyB != nil {
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
-				//emptyB.seq.WriteBarrier()
+				// emptyB.seq.WriteBarrier()
 				newMeta := setByte(emptyMeta, h2v, emptyIdx)
 				StoreInt(&emptyB.meta, newMeta)
 
