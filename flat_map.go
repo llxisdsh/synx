@@ -53,10 +53,7 @@ type flatTable[K comparable, V any] struct {
 	buckets  unsafeSlice[flatBucket[K, V]]
 	mask     int
 	size     unsafeSlice[CounterStripe_]
-	sizeMask uint32
-	// The inline size has minimal effect on reducing cache misses,
-	// so we will not use it for now.
-	// smallSz  uintptr
+	sizeMask int
 }
 
 type flatBucket[K comparable, V any] struct {
@@ -118,10 +115,8 @@ func (m *FlatMap[K, V]) init(
 
 	m.seed = uintptr(rand.Uint64())
 	m.shrinkOn = cfg.autoShrink
-	var newTable flatTable[K, V]
 	tableLen := calcTableLen(cfg.capacity)
-	newTable.makeTable(tableLen, runtime.GOMAXPROCS(0))
-	m.tableSeq.WriteLocked(&m.table, newTable)
+	m.tableSeq.WriteLocked(&m.table, newFlatTable[K, V](tableLen, runtime.GOMAXPROCS(0)))
 }
 
 //go:noinline
@@ -169,10 +164,20 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	idx := table.mask & h1(hash, m.intKey)
 	root := table.buckets.At(idx)
 	for b := root; b != nil; b = (*flatBucket[K, V])(atomic.LoadPointer(&b.next)) {
+		var spins int
+	retry:
+		s1, ok := b.seq.BeginRead()
+		if !ok {
+			delay(&spins)
+			goto retry
+		}
 		meta := atomic.LoadUint64(&b.meta)
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
-			e := b.seq.Read(b.At(j))
+			e := b.At(j).ReadUnfenced()
+			if !b.seq.EndRead(s1) {
+				goto retry
+			}
 			if EmbeddedHash_ {
 				if e.GetHash() == hash && e.Key == key {
 					return e.Value, true
@@ -226,6 +231,9 @@ func (m *FlatMap[K, V]) LoadOrStoreFn(
 // LoadAndUpdate updates the value for key if it exists, returning the previous
 // value. The loaded result reports whether the key was present.
 func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
+	if v, ok := m.Load(key); !ok {
+		return v, ok
+	}
 	_, loaded = m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
 			previous = e.Value()
@@ -238,6 +246,9 @@ func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) 
 // LoadAndDelete deletes the value for a key, returning the previous value.
 // The loaded result reports whether the key was present.
 func (m *FlatMap[K, V]) LoadAndDelete(key K) (previous V, loaded bool) {
+	if v, ok := m.Load(key); !ok {
+		return v, ok
+	}
 	_, loaded = m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
 			previous = e.Value()
@@ -266,6 +277,9 @@ func (m *FlatMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 
 // Delete deletes the value for a key.
 func (m *FlatMap[K, V]) Delete(key K) {
+	if _, ok := m.Load(key); !ok {
+		return
+	}
 	m.Compute(key, func(e *Entry[K, V]) {
 		e.Delete()
 	})
@@ -384,13 +398,14 @@ func (m *FlatMap[K, V]) Compute(
 				root.Unlock()
 				return it.entry.Value, it.loaded
 			}
-			// insert new
+			// insert new: no seqlock window needed since slot was empty (h2=0).
+			// Reader won't access slot until meta is published with valid h2.
+			// StoreBarrier ensures Entry is visible before meta update on ARM.
 			if emptyB != nil {
 				newMeta := setByte(emptyMeta, h2v, emptyIdx)
-				emptyB.seq.BeginWriteLocked()
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
+				emptyB.seq.StoreBarrier()
 				atomic.StoreUint64(&emptyB.meta, newMeta)
-				emptyB.seq.EndWriteLocked()
 
 				root.Unlock()
 				table.AddSize(idx, 1)
@@ -420,10 +435,12 @@ func (m *FlatMap[K, V]) Compute(
 				root.Unlock()
 				return it.entry.Value, it.loaded
 			}
+			// Delete: update meta first so new Readers skip this slot immediately.
+			// Active Readers will see seq change and retry, then see h2=0.
 			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
+			atomic.StoreUint64(&oldB.meta, newMeta)
 			oldB.seq.BeginWriteLocked()
 			oldB.At(oldIdx).WriteUnfenced(Entry_[K, V]{})
-			atomic.StoreUint64(&oldB.meta, newMeta)
 			oldB.seq.EndWriteLocked()
 
 			root.Unlock()
@@ -554,9 +571,9 @@ func (m *FlatMap[K, V]) ComputeRange(
 						b.seq.WriteLocked(e, it.entry)
 					case deleteOp:
 						meta = setByte(meta, slotEmpty, j)
+						atomic.StoreUint64(&b.meta, meta)
 						b.seq.BeginWriteLocked()
 						e.WriteUnfenced(Entry_[K, V]{})
-						atomic.StoreUint64(&b.meta, meta)
 						b.seq.EndWriteLocked()
 
 						table.AddSize(i, -1)
@@ -604,10 +621,7 @@ func (m *FlatMap[K, V]) Clear() {
 	}
 
 	m.rebuild(mapRebuildBlockWritersHint, func() {
-		var newTable flatTable[K, V]
-		cpus := runtime.GOMAXPROCS(0)
-		newTable.makeTable(minTableLen, cpus)
-		m.tableSeq.WriteLocked(&m.table, newTable)
+		m.tableSeq.WriteLocked(&m.table, newFlatTable[K, V](minTableLen, runtime.GOMAXPROCS(0)))
 	})
 }
 
@@ -725,9 +739,7 @@ func (m *FlatMap[K, V]) finalizeResize(
 	overCpus := cpus * resizeOverPartition
 	_, chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
 	rs.chunks = int32(chunks)
-	var newTable flatTable[K, V]
-	newTable.makeTable(newLen, cpus)
-	rs.newTableSeq.WriteLocked(&rs.newTable, newTable) // Release rs
+	rs.newTableSeq.WriteLocked(&rs.newTable, newFlatTable[K, V](newLen, cpus)) // Release rs
 	m.helpCopyAndWait(rs)
 }
 
@@ -838,29 +850,27 @@ func (m *FlatMap[K, V]) copyBucket(
 	}
 }
 
-func (t *flatTable[K, V]) makeTable(
+func newFlatTable[K comparable, V any](
 	tableLen, cpus int,
-) {
+) flatTable[K, V] {
 	sizeLen := calcSizeLen(tableLen, cpus)
-	t.buckets = makeUnsafeSlice(make([]flatBucket[K, V], tableLen))
-	t.mask = tableLen - 1
-	// if sizeLen <= 1 {
-	// 	t.size.ptr = unsafe.Pointer(&t.smallSz)
-	// } else {
-	t.size = makeUnsafeSlice(make([]CounterStripe_, sizeLen))
-	// }
-	t.sizeMask = uint32(sizeLen - 1)
+	return flatTable[K, V]{
+		buckets:  makeUnsafeSlice(make([]flatBucket[K, V], tableLen)),
+		mask:     tableLen - 1,
+		size:     makeUnsafeSlice(make([]CounterStripe_, sizeLen)),
+		sizeMask: sizeLen - 1,
+	}
 }
 
 //go:nosplit
 func (t *flatTable[K, V]) AddSize(idx, delta int) {
-	atomic.AddUintptr(&t.size.At(int(t.sizeMask)&idx).C, uintptr(delta))
+	atomic.AddUintptr(&t.size.At(t.sizeMask&idx).C, uintptr(delta))
 }
 
 //go:nosplit
 func (t *flatTable[K, V]) SumSize() int {
 	var sum uintptr
-	for i := 0; i <= int(t.sizeMask); i++ {
+	for i := 0; i <= t.sizeMask; i++ {
 		sum += atomic.LoadUintptr(&t.size.At(i).C)
 	}
 	return int(sum)
