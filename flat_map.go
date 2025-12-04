@@ -394,7 +394,9 @@ func (m *FlatMap[K, V]) Compute(
 		case updateOp:
 			if it.loaded {
 				e := oldB.At(oldIdx)
-				oldB.seq.WriteLocked(e, it.entry)
+				oldB.seq.BeginWriteLocked()
+				e.WriteUnfenced(it.entry)
+				oldB.seq.EndWriteLocked()
 				root.Unlock()
 				return it.entry.Value, it.loaded
 			}
@@ -568,7 +570,9 @@ func (m *FlatMap[K, V]) ComputeRange(
 					shouldContinue := fn(noEscape(&it))
 					switch it.op {
 					case updateOp:
-						b.seq.WriteLocked(e, it.entry)
+						b.seq.BeginWriteLocked()
+						e.WriteUnfenced(it.entry)
+						b.seq.EndWriteLocked()
 					case deleteOp:
 						meta = setByte(meta, slotEmpty, j)
 						atomic.StoreUint64(&b.meta, meta)

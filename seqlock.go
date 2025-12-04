@@ -147,23 +147,6 @@ func (sl *seqlock[SEQ, T]) EndWrite(s1 SEQ) {
 	}
 }
 
-// StoreBarrier emits a full memory barrier on weak memory models (ARM, etc.)
-// without entering the odd state. On TSO architectures (x86), this is a no-op.
-// Use this before publishing via atomic store when seqlock window is not needed.
-//
-//go:nosplit
-func (sl *seqlock[SEQ, T]) StoreBarrier() {
-	if IsTSO_ {
-		return
-	}
-	// atomic add 0 generates LDADDAL on ARM64, which is a full barrier
-	if unsafe.Sizeof(SEQ(0)) == 4 {
-		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 0)
-	} else {
-		atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 0)
-	}
-}
-
 // BeginWriteLocked enters the writer window using add (odd).
 // Only safe when an external lock is held.
 //
@@ -198,6 +181,23 @@ func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
 	} else {
 		s1 := SEQ(atomic.LoadUint64((*uint64)(unsafe.Pointer(&sl.seq))))
 		return s1 != 0 && s1&1 == 0
+	}
+}
+
+// StoreBarrier emits a full memory barrier on weak memory models (ARM, etc.)
+// without entering the odd state. On TSO architectures (x86), this is a no-op.
+// Use this before publishing via atomic store when seqlock window is not needed.
+//
+//go:nosplit
+func (sl *seqlock[SEQ, T]) StoreBarrier() {
+	if IsTSO_ {
+		return
+	}
+	// atomic add 0 generates LDADDAL on ARM64, which is a full barrier
+	if unsafe.Sizeof(SEQ(0)) == 4 {
+		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 0)
+	} else {
+		atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 0)
 	}
 }
 
