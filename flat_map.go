@@ -162,8 +162,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 	h2v := h2(hash)
 	h2w := broadcast(h2v)
 	idx := table.mask & h1(hash, m.intKey)
-	root := table.buckets.At(idx)
-	for b := root; b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
+	for b := table.buckets.At(idx); b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
 		var spins int
 	retry:
 		s1, ok := b.seq.BeginRead()
@@ -171,7 +170,7 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 			delay(&spins)
 			goto retry
 		}
-		meta := LoadIntInWindow(&b.meta)
+		meta := LoadIntFast(&b.meta)
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
 			e := b.At(j).ReadUnfenced()
@@ -483,12 +482,11 @@ func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 	var cache [entriesPerBucket]Entry_[K, V]
 	var cacheCount int
 	for i := 0; i <= table.mask; i++ {
-		root := table.buckets.At(i)
-		for b := root; b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
+		for b := table.buckets.At(i); b != nil; b = (*flatBucket[K, V])(LoadPtr(&b.next)) {
 			var spins int
 			for {
 				if s1, ok := b.seq.BeginRead(); ok {
-					meta = LoadIntInWindow(&b.meta)
+					meta = LoadIntFast(&b.meta)
 					cacheCount = 0
 					for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 						j := firstMarkedByteIndex(marked)

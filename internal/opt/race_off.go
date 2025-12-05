@@ -81,24 +81,18 @@ func StoreInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
 	}
 }
 
-// LoadIntFast loads an integer atomically on non-TSO architectures.
-// On TSO architectures, it performs a plain integer load.
+// LoadIntFast performs a non-atomic read, safe only when the caller holds
+// a relevant lock or is within a seqlock read window.
 //
 //go:nosplit
 func LoadIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 	return *addr
 }
 
-// StoreIntFast stores an integer atomically on non-TSO architectures.
-// On TSO architectures, it performs a plain integer store.
+// StoreIntFast performs a non-atomic write, safe only for thread-private or
+// not-yet-published memory locations.
 //
 //go:nosplit
 func StoreIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
 	*addr = val
-}
-
-// LoadIntInWindow loads without barrier when inside a seqlock window.
-// Consistency is guaranteed by seqlock retry.
-func LoadIntInWindow[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
-	return *addr
 }

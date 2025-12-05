@@ -122,7 +122,7 @@ func BenchmarkMixed_pb_FlatMapOf(b *testing.B) {
 
 func BenchmarkStore_pb_MapOf(b *testing.B) {
 	b.ReportAllocs()
-	var m synx.Map[int, int]
+	m := synx.NewMap[int, int]()
 	runtime.GC()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -139,7 +139,7 @@ func BenchmarkStore_pb_MapOf(b *testing.B) {
 
 func BenchmarkLoadOrStore_pb_MapOf(b *testing.B) {
 	b.ReportAllocs()
-	var m synx.Map[int, int]
+	m := synx.NewMap[int, int]()
 	runtime.GC()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -156,7 +156,8 @@ func BenchmarkLoadOrStore_pb_MapOf(b *testing.B) {
 
 func BenchmarkLoad_pb_MapOf(b *testing.B) {
 	b.ReportAllocs()
-	var m synx.Map[int, int]
+	m := synx.NewMap[int, int]()
+
 	for i := 0; i < countLoad; i++ {
 		m.Store(i, i)
 	}
@@ -176,7 +177,93 @@ func BenchmarkLoad_pb_MapOf(b *testing.B) {
 
 func BenchmarkMixed_pb_MapOf(b *testing.B) {
 	b.ReportAllocs()
-	var m synx.Map[int, int]
+	m := synx.NewMap[int, int]()
+	for i := 0; i < countLoad; i++ {
+		m.Store(i, i)
+	}
+	runtime.GC()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			switch mixRand(i) {
+			case 0:
+				m.Store(i, i)
+			case 1:
+				m.Delete(i)
+			case 2:
+				_, _ = m.LoadOrStore(i, i)
+			default:
+				_, _ = m.Load(i)
+			}
+			i++
+			if i >= countLoad<<1 {
+				i = 0
+			}
+		}
+	})
+}
+
+// --------------------------------------------------------------
+
+func BenchmarkStore_xsync_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	m := xsync.NewMap[int, int]()
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.Store(i, i)
+			i++
+			if i >= countStore {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkLoadOrStore_xsync_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	m := xsync.NewMap[int, int]()
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.LoadOrStore(i, i)
+			i++
+			if i >= countLoadOrStore {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkLoad_xsync_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	m := xsync.NewMap[int, int]()
+	for i := 0; i < countLoad; i++ {
+		m.Store(i, i)
+	}
+	runtime.GC()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.Load(i)
+			i++
+			if i >= countLoad {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkMixed_xsync_MapOf(b *testing.B) {
+	b.ReportAllocs()
+	m := xsync.NewMap[int, int]()
 	for i := 0; i < countLoad; i++ {
 		m.Store(i, i)
 	}
@@ -348,92 +435,6 @@ func BenchmarkLoad_original_syncMap(b *testing.B) {
 func BenchmarkMixed_original_syncMap(b *testing.B) {
 	b.ReportAllocs()
 	var m sync.Map
-	for i := 0; i < countLoad; i++ {
-		m.Store(i, i)
-	}
-	runtime.GC()
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			switch mixRand(i) {
-			case 0:
-				m.Store(i, i)
-			case 1:
-				m.Delete(i)
-			case 2:
-				_, _ = m.LoadOrStore(i, i)
-			default:
-				_, _ = m.Load(i)
-			}
-			i++
-			if i >= countLoad<<1 {
-				i = 0
-			}
-		}
-	})
-}
-
-// --------------------------------------------------------------
-
-func BenchmarkStore_xsync_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	m := xsync.NewMap[int, int]()
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			m.Store(i, i)
-			i++
-			if i >= countStore {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkLoadOrStore_xsync_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	m := xsync.NewMap[int, int]()
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			_, _ = m.LoadOrStore(i, i)
-			i++
-			if i >= countLoadOrStore {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkLoad_xsync_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	m := xsync.NewMap[int, int]()
-	for i := 0; i < countLoad; i++ {
-		m.Store(i, i)
-	}
-	runtime.GC()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			_, _ = m.Load(i)
-			i++
-			if i >= countLoad {
-				i = 0
-			}
-		}
-	})
-}
-
-func BenchmarkMixed_xsync_MapOf(b *testing.B) {
-	b.ReportAllocs()
-	m := xsync.NewMap[int, int]()
 	for i := 0; i < countLoad; i++ {
 		m.Store(i, i)
 	}
