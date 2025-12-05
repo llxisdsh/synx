@@ -262,10 +262,13 @@ func TestLatencySummary(t *testing.T) {
 
 	// Sort by slowRate (lower is better)
 	slices.SortFunc(results, func(a, b *latencyResult) int {
-		if a.slowRate < b.slowRate {
+		v1 := float64(a.p999) * a.throughput
+		v2 := float64(b.p999) * b.throughput
+
+		if v1 < v2 {
 			return -1
 		}
-		if a.slowRate > b.slowRate {
+		if v1 > v2 {
 			return 1
 		}
 		return 0
