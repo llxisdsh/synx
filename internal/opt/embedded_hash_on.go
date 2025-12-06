@@ -4,19 +4,16 @@ package opt
 
 const EmbeddedHash_ = true
 
-// Entry_ is an immutable key-value entry type for [Map]
-type Entry_[K comparable, V any] struct {
-	Hash  uintptr
-	Key   K
-	Value V
+type EmbeddedHash struct {
+	Hash uintptr
 }
 
 //go:nosplit
-func (e *Entry_[K, V]) GetHash() uintptr {
+func (e *EmbeddedHash) GetHash() uintptr {
 	return e.Hash
 }
 
 //go:nosplit
-func (e *Entry_[K, V]) SetHash(h uintptr) {
+func (e *EmbeddedHash) SetHash(h uintptr) {
 	e.Hash = h
 }

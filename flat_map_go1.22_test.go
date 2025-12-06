@@ -17,25 +17,25 @@ func TestFlatMap_BucketOfStructSize(t *testing.T) {
 	t.Logf("CacheLineSize : %d", cacheLineSize)
 	t.Logf("entriesPerBucket : %d", entriesPerBucket)
 
-	size := unsafe.Sizeof(FlatMap[string, int]{})
+	size := unsafe.Sizeof(FlatMap[int, int]{})
 	t.Log("FlatMap size:", size)
 	if size != cacheLineSize {
 		t.Logf("FlatMap doesn't meet CacheLineSize: %d", size)
 	}
 
-	size = unsafe.Sizeof(flatRebuildState[string, int]{})
+	size = unsafe.Sizeof(flatRebuildState[int, int]{})
 	t.Log("flatRebuildState size:", size)
 	if size != cacheLineSize {
 		t.Logf("flatRebuildState doesn't meet CacheLineSize: %d", size)
 	}
 
-	size = unsafe.Sizeof(flatTable[string, int]{})
+	size = unsafe.Sizeof(flatTable[int, int]{})
 	t.Log("flatTable size:", size)
 	if size != cacheLineSize {
 		t.Logf("flatTable doesn't meet CacheLineSize: %d", size)
 	}
 
-	size = unsafe.Sizeof(flatBucket[string, int]{})
+	size = unsafe.Sizeof(flatBucket[int, int]{})
 	t.Log("flatBucket size:", size)
 	if size != cacheLineSize {
 		t.Logf("flatBucket doesn't meet CacheLineSize: %d", size)

@@ -3,6 +3,8 @@ package synx
 import (
 	"math/bits"
 	"reflect"
+	"runtime"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -106,6 +108,18 @@ const (
 	updateOp
 	deleteOp
 )
+
+// ============================================================================
+// Private struct definitions
+// ============================================================================
+
+// counterStripe represents a striped counter to reduce contention.
+type counterStripe struct {
+	_ [(opt.CacheLineSize_ - unsafe.Sizeof(struct {
+		c uintptr
+	}{})%opt.CacheLineSize_) % opt.CacheLineSize_ * opt.PaddingMult_]byte
+	c uintptr // Counter value, accessed atomically
+}
 
 // ============================================================================
 // Utility Functions
@@ -369,8 +383,8 @@ func delay(spins *int) {
 	// effectively as backoff under high concurrency.
 	// The 500µs duration is derived from Facebook/folly's implementation:
 	// https://github.com/facebook/folly/blob/main/folly/synchronization/detail/Sleeper.h
-	const yieldSleep = 500 * time.Microsecond
-	time.Sleep(yieldSleep)
+	time.Sleep(500 * time.Microsecond)
+	//runtime.Gosched()
 }
 
 // nolint:all
@@ -631,4 +645,127 @@ func iTypeOf(a any) *iType {
 type iEmptyInterface struct {
 	Type *iType
 	Data unsafe.Pointer
+}
+
+// ============================================================================
+// Atomic Utilities
+// ============================================================================
+
+// isTSO_ detects TSO architectures; on TSO, plain reads/writes are safe for
+// pointers and native word-sized integers
+const isTSO_ = !opt.Race_ &&
+	(runtime.GOARCH == "amd64" ||
+		runtime.GOARCH == "386" ||
+		runtime.GOARCH == "s390x")
+
+// loadPtr loads a pointer atomically on non-TSO architectures.
+// On TSO architectures, it performs a plain pointer load.
+//
+//go:nosplit
+func loadPtr(addr *unsafe.Pointer) unsafe.Pointer {
+	if opt.Race_ {
+		return atomic.LoadPointer(addr)
+	} else {
+		if isTSO_ {
+			return *addr
+		} else {
+			return atomic.LoadPointer(addr)
+		}
+	}
+}
+
+// storePtr stores a pointer atomically on non-TSO architectures.
+// On TSO architectures, it performs a plain pointer store.
+//
+//go:nosplit
+func storePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
+	if opt.Race_ {
+		atomic.StorePointer(addr, val)
+	} else {
+		if isTSO_ {
+			*addr = val
+		} else {
+			atomic.StorePointer(addr, val)
+		}
+	}
+}
+
+// loadInt aligned integer load; plain on TSO when width matches,
+// otherwise atomic
+//
+//go:nosplit
+func loadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
+	if opt.Race_ {
+		if unsafe.Sizeof(T(0)) == 4 {
+			return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
+		} else {
+			return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
+		}
+	} else {
+		if unsafe.Sizeof(T(0)) == 4 {
+			if isTSO_ {
+				return *addr
+			} else {
+				return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
+			}
+		} else {
+			if isTSO_ && intSize == 64 {
+				return *addr
+			} else {
+				return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
+			}
+		}
+	}
+}
+
+// storeInt aligned integer store; plain on TSO when width matches,
+// otherwise atomic
+//
+//go:nosplit
+func storeInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
+	if opt.Race_ {
+		if unsafe.Sizeof(T(0)) == 4 {
+			atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
+		} else {
+			atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
+		}
+	} else {
+		if unsafe.Sizeof(T(0)) == 4 {
+			if isTSO_ {
+				*addr = val
+			} else {
+				atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
+			}
+		} else {
+			if isTSO_ && intSize == 64 {
+				*addr = val
+			} else {
+				atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
+			}
+		}
+	}
+}
+
+// loadIntFast performs a non-atomic read, safe only when the caller holds
+// a relevant lock or is within a seqlock read window.
+//
+//go:nosplit
+func loadIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
+	if opt.Race_ {
+		return loadInt(addr)
+	} else {
+		return *addr
+	}
+}
+
+// storeIntFast performs a non-atomic write, safe only for thread-private or
+// not-yet-published memory locations.
+//
+//go:nosplit
+func storeIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
+	if opt.Race_ {
+		storeInt(addr, val)
+	} else {
+		*addr = val
+	}
 }

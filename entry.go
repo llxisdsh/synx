@@ -10,7 +10,7 @@ import "github.com/llxisdsh/synx/internal/opt"
 // - Not safe across goroutines.
 // 警告：仅在回调期间有效；不可保存或让其指针逃逸，也不可跨协程使用。
 type Entry[K comparable, V any] struct {
-	entry  opt.Entry_[K, V]
+	entry  entry_[K, V]
 	loaded bool
 	op     computeOp
 }
@@ -50,4 +50,10 @@ func (e *Entry[K, V]) Update(value V) {
 func (e *Entry[K, V]) Delete() {
 	e.entry.Value = *new(V)
 	e.op = deleteOp
+}
+
+type entry_[K comparable, V any] struct {
+	opt.EmbeddedHash
+	Key   K
+	Value V
 }

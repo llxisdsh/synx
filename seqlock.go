@@ -3,8 +3,6 @@ package synx
 import (
 	"sync/atomic"
 	"unsafe"
-
-	. "github.com/llxisdsh/synx/internal/opt" // nolint:staticcheck
 )
 
 // seqlock[SEQ, T] coordinates tear-free publication for a single slot.
@@ -190,7 +188,7 @@ func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) WriteBarrier() {
-	if IsTSO_ {
+	if isTSO_ {
 		return
 	}
 	// atomic add 0 generates LDADDAL on ARM64, which is a full barrier
@@ -226,7 +224,7 @@ type seqlockSlot[T any] struct {
 //
 //go:nosplit
 func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
-	if IsTSO_ {
+	if isTSO_ {
 		return slot.buf
 	}
 

@@ -1,11 +1,5 @@
-//go:build (amd64 || 386 || arm || mips || mipsle || wasm) && !synx_disable_padding && !synx_enable_padding
+//go:build synx_disable_padding || (!synx_enable_padding && !(arm64 || loong64 || mips64 || mips64le || ppc64 || ppc64le || riscv64 || s390x))
 
 package opt
 
-// CounterStripe_ represents a striped counter to reduce contention.
-// Padding is disabled by default for:
-// - amd64
-// - 32-bit architectures (386, arm, mips, mipsle, wasm)
-type CounterStripe_ struct {
-	C uintptr // Counter value, accessed atomically
-}
+const PaddingMult_ = 0
