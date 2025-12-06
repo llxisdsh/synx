@@ -191,7 +191,6 @@ func (sl *seqlock[SEQ, T]) WriteBarrier() {
 	if isTSO_ {
 		return
 	}
-	// atomic add 0 generates LDADDAL on ARM64, which is a full barrier
 	if unsafe.Sizeof(SEQ(0)) == 4 {
 		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 0)
 	} else {

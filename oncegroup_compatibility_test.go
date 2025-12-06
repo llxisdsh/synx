@@ -99,11 +99,11 @@ func TestDo(t *testing.T) {
 
 func TestDoErr(t *testing.T) {
 	var g Group
-	someErr := errors.New("Some error")
+	someErr := errors.New("some error")
 	v, err, _ := g.Do("key", func() (any, error) {
 		return nil, someErr
 	})
-	if err != someErr {
+	if !errors.Is(err, someErr) {
 		t.Errorf("Do error = %v; want someErr %v", err, someErr)
 	}
 	if v != nil {

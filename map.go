@@ -63,8 +63,7 @@ type mapTable struct {
 
 // bucket represents a hash table bucket with cache-line alignment.
 type bucket struct {
-	// meta: SWAR-optimized metadata for fast entry lookups
-	// (must be 64-bit aligned)
+	// meta: metadata for fast entry lookups, must be 64-bit aligned
 	_       [0]atomic.Uint64
 	meta    uint64
 	entries [entriesPerBucket]unsafe.Pointer // *opt.Entry_

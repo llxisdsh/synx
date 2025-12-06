@@ -90,6 +90,11 @@ const (
 	// enableHashSpread: improve hash distribution for non-integer keys
 	// Reduces collisions for complex types but adds computational overhead
 	enableHashSpread = false
+
+	// prioritizeLowLatency: lower latency over CPU usage.
+	// Uses runtime.Gosched() for faster retries, unlike time.Sleep()
+	// which increases throughput but results in slightly higher tail latency.
+	prioritizeLowLatency = false
 )
 
 type mapRebuildHint uint8
@@ -379,12 +384,15 @@ func delay(spins *int) {
 		return
 	}
 	*spins = 0
-	// time.Sleep with non-zero duration (≈Millisecond level) works
-	// effectively as backoff under high concurrency.
-	// The 500µs duration is derived from Facebook/folly's implementation:
-	// https://github.com/facebook/folly/blob/main/folly/synchronization/detail/Sleeper.h
-	time.Sleep(500 * time.Microsecond)
-	//runtime.Gosched()
+	if prioritizeLowLatency {
+		runtime.Gosched()
+	} else {
+		// time.Sleep with non-zero duration (≈Millisecond level) works
+		// effectively as backoff under high concurrency.
+		// The 500µs duration is derived from Facebook/folly's implementation:
+		// https://github.com/facebook/folly/blob/main/folly/synchronization/detail/Sleeper.h
+		time.Sleep(500 * time.Microsecond)
+	}
 }
 
 // nolint:all
@@ -653,6 +661,8 @@ type iEmptyInterface struct {
 
 // isTSO_ detects TSO architectures; on TSO, plain reads/writes are safe for
 // pointers and native word-sized integers
+//
+//goland:noinspection GoBoolExpressions
 const isTSO_ = !opt.Race_ &&
 	(runtime.GOARCH == "amd64" ||
 		runtime.GOARCH == "386" ||
