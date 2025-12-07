@@ -368,7 +368,7 @@ func (m *Map[K, V]) Store(key K, value V) {
 	)
 }
 
-// Swap stores a key-value pair and returns the previous value if any,
+// Swap stores a key-value pair and returns the previous value if any.
 // compatible with `sync.Map`.
 func (m *Map[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 	table := (*mapTable)(loadPtr(&m.table))
@@ -402,7 +402,8 @@ func (m *Map[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 	)
 }
 
-// Delete removes a key-value pair, compatible with `sync.Map`.
+// Delete removes a key-value pair.
+// compatible with `sync.Map`.
 func (m *Map[K, V]) Delete(key K) {
 	table := (*mapTable)(loadPtr(&m.table))
 	if table == nil {

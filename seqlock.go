@@ -282,9 +282,9 @@ func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
 	slot.buf = v
 }
 
-// Ptr returns the address of the inline buffer. Mutations through this
-// pointer must be guarded by an external lock or odd/even sequence;
-// otherwise readers may observe torn data.
+// Ptr returns the address of the inline buffer.
+// Mutations through this pointer must be guarded by an external lock or
+// odd/even sequence; otherwise readers may observe torn data.
 //
 //go:nosplit
 func (slot *seqlockSlot[T]) Ptr() *T {

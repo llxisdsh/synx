@@ -409,10 +409,10 @@ func (m *FlatMap[K, V]) Compute(
 				root.Unlock()
 				return it.entry.Value, it.loaded
 			}
-			// insert new: no seqlock window needed since slot was empty (h2=0).
-			// Reader won't access slot until meta is published with valid h2.
-			// StoreBarrier ensures Entry is visible before meta update on ARM.
 			if emptyB != nil {
+				// insert new: no seqlock window needed since slot was empty.
+				// Reader won't access slot until meta is published with valid h2.
+				// StoreBarrier ensures Entry is visible before meta update on ARM.
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
 				// emptyB.seq.WriteBarrier()
 				newMeta := setByte(emptyMeta, h2v, emptyIdx)
@@ -637,7 +637,7 @@ func (m *FlatMap[K, V]) Clear() {
 	})
 }
 
-// ToMap collect up to limit entries into a map[K]V, limit < 0 is no limit
+// ToMap collect up to limit entries into a map[K]V, limit < 0 is no limit.
 func (m *FlatMap[K, V]) ToMap(limit ...int) map[K]V {
 	l := maxInt
 	if len(limit) != 0 {

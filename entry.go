@@ -52,6 +52,7 @@ func (e *Entry[K, V]) Delete() {
 	e.op = deleteOp
 }
 
+// entry_ is the internal representation of a map entry.
 type entry_[K comparable, V any] struct {
 	opt.EmbeddedHash
 	Key   K

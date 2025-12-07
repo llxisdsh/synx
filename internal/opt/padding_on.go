@@ -2,4 +2,4 @@
 
 package opt
 
-const PaddingMult_ = 1
+const Padding_ = 1

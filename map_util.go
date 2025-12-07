@@ -103,10 +103,25 @@ const (
 // ============================================================================
 
 // counterStripe represents a striped counter to reduce contention.
+//
+// Padding strategy:
+//   - amd64: Padding is omitted by default — performance is identical
+//     with or without padding on this architecture.
+//   - Other 64‑bit arches: Padding is automatically enabled by default
+//     to prevent false sharing.
+//   - 32‑bit arches: Padding is automatically disabled to save memory.
+//
+// Manual override via build options:
+//   - synx_enable_padding – force padding on any architecture.
+//   - synx_disable_padding – force disable padding on any architecture.
+//
+// When padding is active, each stripe occupies a full cache line.
+// This consumes a small amount of extra memory, but significantly reduces
+// performance loss due to false sharing.
 type counterStripe struct {
 	_ [(opt.CacheLineSize_ - unsafe.Sizeof(struct {
 		c uintptr
-	}{})%opt.CacheLineSize_) % opt.CacheLineSize_ * opt.PaddingMult_]byte
+	}{})%opt.CacheLineSize_) % opt.CacheLineSize_ * opt.Padding_]byte
 	c uintptr // Counter value, accessed atomically
 }
 
