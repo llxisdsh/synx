@@ -198,8 +198,10 @@ func (m *FlatMap[K, V]) LoadOrStore(
 	key K,
 	value V,
 ) (actual V, loaded bool) {
-	if v, ok := m.Load(key); ok {
-		return v, true
+	if enableFastPath {
+		if v, ok := m.Load(key); ok {
+			return v, true
+		}
 	}
 	return m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
@@ -216,8 +218,10 @@ func (m *FlatMap[K, V]) LoadOrStoreFn(
 	key K,
 	valueFn func() V,
 ) (actual V, loaded bool) {
-	if v, ok := m.Load(key); ok {
-		return v, true
+	if enableFastPath {
+		if v, ok := m.Load(key); ok {
+			return v, true
+		}
 	}
 	return m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
@@ -230,8 +234,10 @@ func (m *FlatMap[K, V]) LoadOrStoreFn(
 // LoadAndUpdate updates the value for key if it exists, returning the previous
 // value. The loaded result reports whether the key was present.
 func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) {
-	if v, ok := m.Load(key); !ok {
-		return v, ok
+	if enableFastPath {
+		if v, ok := m.Load(key); !ok {
+			return v, ok
+		}
 	}
 	_, loaded = m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
@@ -245,8 +251,10 @@ func (m *FlatMap[K, V]) LoadAndUpdate(key K, value V) (previous V, loaded bool) 
 // LoadAndDelete deletes the value for a key, returning the previous value.
 // The loaded result reports whether the key was present.
 func (m *FlatMap[K, V]) LoadAndDelete(key K) (previous V, loaded bool) {
-	if v, ok := m.Load(key); !ok {
-		return v, ok
+	if enableFastPath {
+		if v, ok := m.Load(key); !ok {
+			return v, ok
+		}
 	}
 	_, loaded = m.Compute(key, func(e *Entry[K, V]) {
 		if e.Loaded() {
@@ -276,8 +284,10 @@ func (m *FlatMap[K, V]) Swap(key K, value V) (previous V, loaded bool) {
 
 // Delete deletes the value for a key.
 func (m *FlatMap[K, V]) Delete(key K) {
-	if _, ok := m.Load(key); !ok {
-		return
+	if enableFastPath {
+		if _, ok := m.Load(key); !ok {
+			return
+		}
 	}
 	m.Compute(key, func(e *Entry[K, V]) {
 		e.Delete()

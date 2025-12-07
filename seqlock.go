@@ -54,39 +54,6 @@ func (sl *seqlock[SEQ, T]) slowRead(slot *seqlockSlot[T]) (v T) {
 	}
 }
 
-// Write publishes v guarded by the external seqlock.
-// Enters odd, copies v, then exits to even to publish a stable snapshot.
-func (sl *seqlock[SEQ, T]) Write(slot *seqlockSlot[T], v T) {
-	if s1, ok := sl.BeginWrite(); ok {
-		slot.WriteUnfenced(v)
-		sl.EndWrite(s1)
-		return
-	}
-	sl.slowWrite(slot, v)
-}
-
-func (sl *seqlock[SEQ, T]) slowWrite(slot *seqlockSlot[T], v T) {
-	var spins int
-	for {
-		if s1, ok := sl.BeginWrite(); ok {
-			slot.WriteUnfenced(v)
-			sl.EndWrite(s1)
-			return
-		}
-		delay(&spins)
-	}
-}
-
-// WriteLocked publishes v using in-lock odd/even increments.
-// Only safe when an external lock is held; avoids CAS by using add.
-//
-//go:nosplit
-func (sl *seqlock[SEQ, T]) WriteLocked(slot *seqlockSlot[T], v T) {
-	sl.BeginWriteLocked()
-	slot.WriteUnfenced(v)
-	sl.EndWriteLocked()
-}
-
 // BeginRead enters the reader window if seq is even.
 // Returns the observed sequence and ok=true when even.
 //
@@ -111,6 +78,29 @@ func (sl *seqlock[SEQ, T]) EndRead(s1 SEQ) (ok bool) {
 	} else {
 		s2 := SEQ(atomic.LoadUint64((*uint64)(unsafe.Pointer(&sl.seq))))
 		return s1 == s2
+	}
+}
+
+// Write publishes v guarded by the external seqlock.
+// Enters odd, copies v, then exits to even to publish a stable snapshot.
+func (sl *seqlock[SEQ, T]) Write(slot *seqlockSlot[T], v T) {
+	if s1, ok := sl.BeginWrite(); ok {
+		slot.WriteUnfenced(v)
+		sl.EndWrite(s1)
+		return
+	}
+	sl.slowWrite(slot, v)
+}
+
+func (sl *seqlock[SEQ, T]) slowWrite(slot *seqlockSlot[T], v T) {
+	var spins int
+	for {
+		if s1, ok := sl.BeginWrite(); ok {
+			slot.WriteUnfenced(v)
+			sl.EndWrite(s1)
+			return
+		}
+		delay(&spins)
 	}
 }
 
@@ -143,6 +133,16 @@ func (sl *seqlock[SEQ, T]) EndWrite(s1 SEQ) {
 	} else {
 		atomic.StoreUint64((*uint64)(unsafe.Pointer(&sl.seq)), uint64(s1)+2)
 	}
+}
+
+// WriteLocked publishes v using in-lock odd/even increments.
+// Only safe when an external lock is held; avoids CAS by using add.
+//
+//go:nosplit
+func (sl *seqlock[SEQ, T]) WriteLocked(slot *seqlockSlot[T], v T) {
+	sl.BeginWriteLocked()
+	slot.WriteUnfenced(v)
+	sl.EndWriteLocked()
 }
 
 // BeginWriteLocked enters the writer window using add (odd).
@@ -188,13 +188,12 @@ func (sl *seqlock[SEQ, T]) WriteCompleted() (ok bool) {
 //
 //go:nosplit
 func (sl *seqlock[SEQ, T]) WriteBarrier() {
-	if isTSO_ {
-		return
-	}
-	if unsafe.Sizeof(SEQ(0)) == 4 {
-		atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 0)
-	} else {
-		atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 0)
+	if !isTSO_ {
+		if unsafe.Sizeof(SEQ(0)) == 4 {
+			atomic.AddUint32((*uint32)(unsafe.Pointer(&sl.seq)), 0)
+		} else {
+			atomic.AddUint64((*uint64)(unsafe.Pointer(&sl.seq)), 0)
+		}
 	}
 }
 
@@ -223,54 +222,52 @@ type seqlockSlot[T any] struct {
 //
 //go:nosplit
 func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
-	if isTSO_ {
-		return slot.buf
-	}
-
-	if unsafe.Sizeof(slot.buf) == 0 {
-		return v
-	}
-
-	ws := unsafe.Sizeof(uintptr(0))
-	sz := unsafe.Sizeof(slot.buf)
-	al := unsafe.Alignof(slot.buf)
-	if al >= ws && sz%ws == 0 {
-		n := sz / ws
-		switch n {
-		case 1:
-			u := atomic.LoadUintptr((*uintptr)(unsafe.Pointer(&slot.buf)))
-			*(*uintptr)(unsafe.Pointer(&v)) = u
-		case 2:
-			p := (*[2]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[2]uintptr)(unsafe.Pointer(&v))
-			q[0] = atomic.LoadUintptr(&p[0])
-			q[1] = atomic.LoadUintptr(&p[1])
-		case 3:
-			p := (*[3]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[3]uintptr)(unsafe.Pointer(&v))
-			q[0] = atomic.LoadUintptr(&p[0])
-			q[1] = atomic.LoadUintptr(&p[1])
-			q[2] = atomic.LoadUintptr(&p[2])
-		case 4:
-			p := (*[4]uintptr)(unsafe.Pointer(&slot.buf))
-			q := (*[4]uintptr)(unsafe.Pointer(&v))
-			q[0] = atomic.LoadUintptr(&p[0])
-			q[1] = atomic.LoadUintptr(&p[1])
-			q[2] = atomic.LoadUintptr(&p[2])
-			q[3] = atomic.LoadUintptr(&p[3])
-		default:
-			for i := range n {
-				off := i * ws
-				src := (*uintptr)(unsafe.Pointer(
-					uintptr(unsafe.Pointer(&slot.buf)) + off,
-				))
-				dst := (*uintptr)(unsafe.Pointer(
-					uintptr(unsafe.Pointer(&v)) + off,
-				))
-				*dst = atomic.LoadUintptr(src)
-			}
+	if !isTSO_ {
+		if unsafe.Sizeof(slot.buf) == 0 {
+			return v
 		}
-		return v
+
+		ws := unsafe.Sizeof(uintptr(0))
+		sz := unsafe.Sizeof(slot.buf)
+		al := unsafe.Alignof(slot.buf)
+		if al >= ws && sz%ws == 0 {
+			n := sz / ws
+			switch n {
+			case 1:
+				u := atomic.LoadUintptr((*uintptr)(unsafe.Pointer(&slot.buf)))
+				*(*uintptr)(unsafe.Pointer(&v)) = u
+			case 2:
+				p := (*[2]uintptr)(unsafe.Pointer(&slot.buf))
+				q := (*[2]uintptr)(unsafe.Pointer(&v))
+				q[0] = atomic.LoadUintptr(&p[0])
+				q[1] = atomic.LoadUintptr(&p[1])
+			case 3:
+				p := (*[3]uintptr)(unsafe.Pointer(&slot.buf))
+				q := (*[3]uintptr)(unsafe.Pointer(&v))
+				q[0] = atomic.LoadUintptr(&p[0])
+				q[1] = atomic.LoadUintptr(&p[1])
+				q[2] = atomic.LoadUintptr(&p[2])
+			case 4:
+				p := (*[4]uintptr)(unsafe.Pointer(&slot.buf))
+				q := (*[4]uintptr)(unsafe.Pointer(&v))
+				q[0] = atomic.LoadUintptr(&p[0])
+				q[1] = atomic.LoadUintptr(&p[1])
+				q[2] = atomic.LoadUintptr(&p[2])
+				q[3] = atomic.LoadUintptr(&p[3])
+			default:
+				for i := range n {
+					off := i * ws
+					src := (*uintptr)(unsafe.Pointer(
+						uintptr(unsafe.Pointer(&slot.buf)) + off,
+					))
+					dst := (*uintptr)(unsafe.Pointer(
+						uintptr(unsafe.Pointer(&v)) + off,
+					))
+					*dst = atomic.LoadUintptr(src)
+				}
+			}
+			return v
+		}
 	}
 	return slot.buf
 }

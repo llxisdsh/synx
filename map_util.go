@@ -15,8 +15,11 @@ import (
 // Private Constants
 // ============================================================================
 
-// cacheLineSize is the size of a cache line in bytes.
-const cacheLineSize = opt.CacheLineSize_
+const (
+	intSize       = 32 << (^uint(0) >> 63) // 32 or 64
+	maxInt        = 1<<(intSize-1) - 1     // maxInt32 or maxInt64
+	cacheLineSize = opt.CacheLineSize_     // size of a cache line in bytes
+)
 
 const (
 	// opByteIdx reserves the highest byte of meta for extended status flags
@@ -60,7 +63,6 @@ const (
 	slotMask  uint8 = 0x80
 )
 
-// Performance and resizing configuration
 const (
 	// shrinkFraction: shrink table when occupancy < 1/shrinkFraction
 	shrinkFraction = 8
@@ -74,27 +76,9 @@ const (
 	asyncThreshold = 128 * 1024
 	// resizeOverPartition: over-partition factor to reduce resize tail latency
 	resizeOverPartition = 8
-)
-
-const (
-	intSize = 32 << (^uint(0) >> 63) // 32 or 64
-	maxInt  = 1<<(intSize-1) - 1     // MaxInt32 or MaxInt64 depending on intSize.
-)
-
-// Feature flags for performance optimization
-const (
 	// enableFastPath: optimize read operations by avoiding locks when possible
 	// Can reduce latency by up to 100x in read-heavy scenarios
 	enableFastPath = true
-
-	// enableHashSpread: improve hash distribution for non-integer keys
-	// Reduces collisions for complex types but adds computational overhead
-	enableHashSpread = false
-
-	// prioritizeLowLatency: lower latency over CPU usage.
-	// Uses runtime.Gosched() for faster retries, unlike time.Sleep()
-	// which increases throughput but results in slightly higher tail latency.
-	prioritizeLowLatency = false
 )
 
 type mapRebuildHint uint8
@@ -143,17 +127,11 @@ type counterStripe struct {
 //
 //go:nosplit
 func calcParallelism(items, threshold, cpus int) (chunkSz, chunks int) {
-	// If the items are too small, use single-threaded processing.
-	// Adjusts the parallel process trigger threshold using a scaling factor.
-	// example: items < threshold * 2
 	if items <= threshold {
 		return items, 1
 	}
-
 	chunks = min(items/threshold, cpus)
-
 	chunkSz = (items + chunks - 1) / chunks
-
 	return chunkSz, chunks
 }
 
@@ -228,6 +206,10 @@ func noEscape[T any](p *T) *T {
 // ============================================================================
 // SWAR Utilities
 // ============================================================================
+
+// enableHashSpread: improve hash distribution for non-integer keys
+// Reduces collisions for complex types but adds computational overhead
+const enableHashSpread = false
 
 // spread improves hash distribution by XORing the original hash with its high
 // bits.
@@ -384,6 +366,10 @@ func delay(spins *int) {
 		return
 	}
 	*spins = 0
+	// prioritizeLowLatency: lower latency over CPU usage.
+	// Uses runtime.Gosched() for faster retries, unlike time.Sleep()
+	// which increases throughput but results in slightly higher tail latency.
+	const prioritizeLowLatency = false
 	if prioritizeLowLatency {
 		runtime.Gosched()
 	} else {
@@ -663,24 +649,22 @@ type iEmptyInterface struct {
 // pointers and native word-sized integers
 //
 //goland:noinspection GoBoolExpressions
-const isTSO_ = !opt.Race_ &&
-	(runtime.GOARCH == "amd64" ||
-		runtime.GOARCH == "386" ||
-		runtime.GOARCH == "s390x")
+const isTSO_ = runtime.GOARCH == "amd64" ||
+	runtime.GOARCH == "386" ||
+	runtime.GOARCH == "s390x"
+
+//goland:noinspection GoBoolExpressions
+const noRaceTSO_ = !opt.Race_ && isTSO_
 
 // loadPtr loads a pointer atomically on non-TSO architectures.
 // On TSO architectures, it performs a plain pointer load.
 //
 //go:nosplit
 func loadPtr(addr *unsafe.Pointer) unsafe.Pointer {
-	if opt.Race_ {
-		return atomic.LoadPointer(addr)
+	if noRaceTSO_ {
+		return *addr
 	} else {
-		if isTSO_ {
-			return *addr
-		} else {
-			return atomic.LoadPointer(addr)
-		}
+		return atomic.LoadPointer(addr)
 	}
 }
 
@@ -689,14 +673,10 @@ func loadPtr(addr *unsafe.Pointer) unsafe.Pointer {
 //
 //go:nosplit
 func storePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
-	if opt.Race_ {
-		atomic.StorePointer(addr, val)
+	if noRaceTSO_ {
+		*addr = val
 	} else {
-		if isTSO_ {
-			*addr = val
-		} else {
-			atomic.StorePointer(addr, val)
-		}
+		atomic.StorePointer(addr, val)
 	}
 }
 
@@ -705,25 +685,17 @@ func storePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 //
 //go:nosplit
 func loadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
-	if opt.Race_ {
-		if unsafe.Sizeof(T(0)) == 4 {
-			return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
+	if unsafe.Sizeof(T(0)) == 4 {
+		if noRaceTSO_ {
+			return *addr
 		} else {
-			return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
+			return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
 		}
 	} else {
-		if unsafe.Sizeof(T(0)) == 4 {
-			if isTSO_ {
-				return *addr
-			} else {
-				return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
-			}
+		if noRaceTSO_ && intSize == 64 {
+			return *addr
 		} else {
-			if isTSO_ && intSize == 64 {
-				return *addr
-			} else {
-				return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
-			}
+			return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
 		}
 	}
 }
@@ -733,25 +705,17 @@ func loadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
 //
 //go:nosplit
 func storeInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
-	if opt.Race_ {
-		if unsafe.Sizeof(T(0)) == 4 {
-			atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
+	if unsafe.Sizeof(T(0)) == 4 {
+		if noRaceTSO_ {
+			*addr = val
 		} else {
-			atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
+			atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
 		}
 	} else {
-		if unsafe.Sizeof(T(0)) == 4 {
-			if isTSO_ {
-				*addr = val
-			} else {
-				atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
-			}
+		if noRaceTSO_ && intSize == 64 {
+			*addr = val
 		} else {
-			if isTSO_ && intSize == 64 {
-				*addr = val
-			} else {
-				atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
-			}
+			atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
 		}
 	}
 }

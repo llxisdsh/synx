@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 	"unsafe"
-
-	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // ============================================================================
@@ -6094,7 +6092,7 @@ func TestMap_EmbeddedHash(t *testing.T) {
 		// Verify it's still 0 since setHash is a no-op
 		hash = entry.GetHash()
 		//goland:noinspection ALL
-		if opt.EmbeddedHash_ {
+		if unsafe.Sizeof(entry.EmbeddedHash) != 0 {
 			if hash != 0x12345678 {
 				t.Errorf("After setHash, Entry_.getHash() = %d, want 0x12345678", hash)
 			}
