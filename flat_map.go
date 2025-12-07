@@ -494,26 +494,28 @@ func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 	for i := 0; i <= table.mask; i++ {
 		for b := table.buckets.At(i); b != nil; b = (*flatBucket[K, V])(loadPtr(&b.next)) {
 			var spins int
-			for {
-				if s1, ok := b.seq.BeginRead(); ok {
-					meta = loadIntFast(&b.meta)
-					cacheCount = 0
-					for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-						j := firstMarkedByteIndex(marked)
-						cache[cacheCount] = b.At(j).ReadUnfenced()
-						cacheCount++
-					}
-					if b.seq.EndRead(s1) {
-						for j := range cacheCount {
-							kv := &cache[j]
-							if !yield(kv.Key, kv.Value) {
-								return
-							}
-						}
-						break
-					}
-				}
+		retry:
+			s1, ok := b.seq.BeginRead()
+
+			if !ok {
 				delay(&spins)
+				goto retry
+			}
+			meta = loadIntFast(&b.meta)
+			cacheCount = 0
+			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+				j := firstMarkedByteIndex(marked)
+				cache[cacheCount] = b.At(j).ReadUnfenced()
+				cacheCount++
+			}
+			if !b.seq.EndRead(s1) {
+				goto retry
+			}
+			for j := range cacheCount {
+				kv := &cache[j]
+				if !yield(kv.Key, kv.Value) {
+					return
+				}
 			}
 		}
 	}
