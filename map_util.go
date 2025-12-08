@@ -408,47 +408,6 @@ func runtime_canSpin(i int) bool
 //goland:noinspection ALL
 func runtime_doSpin()
 
-// Concurrency variable access rules
-// 1. If a variable has atomic writes outside locks:
-//    - Must use atomic loads AND stores inside locks
-//    - Example:
-//      var value int32
-//      func update() {
-//          atomic.StoreInt32(&value, 1) // external atomic write
-//      }
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          v := atomic.LoadInt32(&value) // internal atomic load
-//          atomic.StoreInt32(&value, v+1) // internal atomic store
-//      }
-//
-// 2. If a variable only has atomic reads outside locks:
-//    - Only need atomic stores inside locks (atomic loads not required)
-//    - Example:
-//      func read() int32 {
-//          return atomic.LoadInt32(&value) // external atomic read
-//      }
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          // Normal read sufficient (lock guarantees visibility)
-//          v := value
-//          // But writes need atomic store:
-//          atomic.StoreInt32(&value, 42)
-//      }
-//
-// 3. If a variable has no external access:
-//    - No atomic operations needed inside locks
-//    - Normal reads/writes sufficient (lock provides full protection)
-//    - Example:
-//      func lockedOp() {
-//          mu.Lock()
-//          defer mu.Unlock()
-//          value = 42 // normal write
-//          v := value // normal read
-//      }
-
 // ============================================================================
 // Hash Utilities
 // ============================================================================
@@ -758,3 +717,44 @@ func storeIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
 		*addr = val
 	}
 }
+
+// Concurrency variable access rules
+// 1. If a variable has atomic writes outside locks:
+//    - Must use atomic loads AND stores inside locks
+//    - Example:
+//      var value int32
+//      func update() {
+//          atomic.StoreInt32(&value, 1) // external atomic write
+//      }
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          v := atomic.LoadInt32(&value) // internal atomic load
+//          atomic.StoreInt32(&value, v+1) // internal atomic store
+//      }
+//
+// 2. If a variable only has atomic reads outside locks:
+//    - Only need atomic stores inside locks (atomic loads not required)
+//    - Example:
+//      func read() int32 {
+//          return atomic.LoadInt32(&value) // external atomic read
+//      }
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          // Normal read sufficient (lock guarantees visibility)
+//          v := value
+//          // But writes need atomic store:
+//          atomic.StoreInt32(&value, 42)
+//      }
+//
+// 3. If a variable has no external access:
+//    - No atomic operations needed inside locks
+//    - Normal reads/writes sufficient (lock provides full protection)
+//    - Example:
+//      func lockedOp() {
+//          mu.Lock()
+//          defer mu.Unlock()
+//          value = 42 // normal write
+//          v := value // normal read
+//      }
