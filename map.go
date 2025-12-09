@@ -1289,9 +1289,9 @@ func (m *Map[K, V]) helpCopyAndWait(rs *rebuildState) {
 		start := int(process) * chunkSz
 		end := min(start+chunkSz, tableLen)
 		if isGrowth {
-			m.copyBucket(table, start, end, newTable, false)
+			m.copyBucketGrow(table, start, end, newTable)
 		} else {
-			m.copyBucket(table, start, end, newTable, true)
+			m.copyBucketShrink(table, start, end, newTable)
 		}
 		if atomic.AddInt32(&rs.completed, 1) == chunks {
 			// Copying completed
@@ -1302,20 +1302,20 @@ func (m *Map[K, V]) helpCopyAndWait(rs *rebuildState) {
 	}
 }
 
-func (m *Map[K, V]) copyBucket(
+func (m *Map[K, V]) copyBucketGrow(
 	table *mapTable,
 	start, end int,
 	newTable *mapTable,
-	lockBucket bool,
 ) {
+	mask := newTable.mask
 	seed := m.seed
 	keyHash := m.keyHash
 	intKey := m.intKey
 	copied := 0
 	for i := start; i < end; i++ {
-		srcBucket := table.buckets.At(i)
-		srcBucket.Lock()
-		for b := srcBucket; b != nil; b = (*bucket)(b.next) {
+		srcB := table.buckets.At(i)
+		srcB.Lock()
+		for b := srcB; b != nil; b = (*bucket)(b.next) {
 			meta := loadIntFast(&b.meta)
 			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
@@ -1326,47 +1326,94 @@ func (m *Map[K, V]) copyBucket(
 					} else {
 						hash = keyHash(noescape(unsafe.Pointer(&e.Key)), seed)
 					}
-					idx := newTable.mask & h1(hash, intKey)
-					destBucket := newTable.buckets.At(idx)
+					idx := mask & h1(hash, intKey)
+					destB := newTable.buckets.At(idx)
 					h2v := h2(hash)
-
-					if lockBucket {
-						destBucket.Lock()
-					}
-					b := destBucket
-				appendToBucket:
-					for {
-						meta := loadIntFast(&b.meta)
-						empty := (^meta) & metaMask
-						if empty != 0 {
-							emptyIdx := firstMarkedByteIndex(empty)
-							storeIntFast(&b.meta, setByte(meta, h2v, emptyIdx))
-							*b.At(emptyIdx) = unsafe.Pointer(e)
-							break appendToBucket
-						}
-						next := (*bucket)(b.next)
-						if next == nil {
-							b.next = unsafe.Pointer(&bucket{
-								meta:    setByte(metaEmpty, h2v, 0),
-								entries: [entriesPerBucket]unsafe.Pointer{unsafe.Pointer(e)},
-							})
-							break appendToBucket
-						}
-						b = next
-					}
-					if lockBucket {
-						destBucket.Unlock()
-					}
+					appendEntry(h2v, e, destB)
 					copied++
 				}
 			}
 		}
-		srcBucket.Unlock()
+		srcB.Unlock()
 	}
 	if copied != 0 {
-		// copyBucket is used during multithreaded growth, requiring a
-		// thread-safe AddSize.
 		newTable.AddSize(start, copied)
+	}
+}
+
+func (m *Map[K, V]) copyBucketShrink(
+	table *mapTable,
+	start, end int,
+	newTable *mapTable,
+) {
+	mask := newTable.mask
+	seed := m.seed
+	keyHash := m.keyHash
+	copied := 0
+	for i := start; i < end; i++ {
+		srcB := table.buckets.At(i)
+		srcB.Lock()
+		idx := i & mask
+		destB := newTable.buckets.At(idx)
+		locked := false
+		for b := srcB; b != nil; b = (*bucket)(b.next) {
+			meta := loadIntFast(&b.meta)
+			if meta&metaMask == 0 {
+				continue
+			}
+			if !locked {
+				locked = true
+				destB.Lock()
+			}
+			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+				j := firstMarkedByteIndex(marked)
+				if e := (*entry_[K, V])(*b.At(j)); e != nil {
+					var hash uintptr
+					if opt.EmbeddedHash_ {
+						hash = e.GetHash()
+					} else {
+						hash = keyHash(noescape(unsafe.Pointer(&e.Key)), seed)
+					}
+					h2v := h2(hash)
+					appendEntry(h2v, e, destB)
+					copied++
+				}
+			}
+		}
+		if locked {
+			destB.Unlock()
+		}
+		srcB.Unlock()
+	}
+	if copied != 0 {
+		newTable.AddSize(start, copied)
+	}
+}
+
+//go:nosplit
+func appendEntry[K comparable, V any](
+	h2v uint8,
+	e *entry_[K, V],
+	destB *bucket,
+) {
+	for {
+		meta := loadIntFast(&destB.meta)
+		empty := (^meta) & metaMask
+		if empty != 0 {
+			emptyIdx := firstMarkedByteIndex(empty)
+			storeIntFast(&destB.meta, setByte(meta, h2v, emptyIdx))
+			*destB.At(emptyIdx) = unsafe.Pointer(e)
+			return
+		}
+		next := (*bucket)(destB.next)
+		if next == nil {
+			destB.next = unsafe.Pointer(&bucket{
+				meta:    setByte(metaEmpty, h2v, 0),
+				entries: [entriesPerBucket]unsafe.Pointer{unsafe.Pointer(e)},
+			})
+			return
+		}
+		destB = next
 	}
 }
 
