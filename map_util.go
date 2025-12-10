@@ -138,16 +138,15 @@ type counterStripe struct {
 //
 // Returns:
 //   - chunks: Suggested degree of parallelism (number of goroutines).
-//   - chunkSz: Number of items processed per goroutine
 //
 //go:nosplit
-func calcParallelism(items, threshold, cpus int) (chunkSz, chunks int) {
+func calcParallelism(items, threshold, cpus int) int {
 	if items <= threshold {
-		return items, 1
+		return 1
 	}
-	chunks = min(items/threshold, cpus)
-	chunkSz = (items + chunks - 1) / chunks
-	return chunkSz, chunks
+	chunks := min(items/threshold, cpus)
+	// chunkSz = (items + chunks - 1) / chunks
+	return chunks
 }
 
 // calcTableLen computes the bucket count for the table

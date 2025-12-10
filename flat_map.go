@@ -726,12 +726,16 @@ func (m *FlatMap[K, V]) tryResize(hint mapRebuildHint, size, sizeAdd int) {
 		// mapShrinkHint
 		if sizeAdd == 0 {
 			newLen = tableLen >> 1
+			if newLen < minTableLen {
+				m.endRebuild(rs)
+				return
+			}
 		} else {
 			newLen = calcTableLen(size)
-		}
-		if newLen < minTableLen {
-			m.endRebuild(rs)
-			return
+			if newLen >= tableLen {
+				m.endRebuild(rs)
+				return
+			}
 		}
 	}
 
@@ -751,7 +755,7 @@ func (m *FlatMap[K, V]) finalizeResize(
 	cpus int,
 ) {
 	overCpus := cpus * resizeOverPartition
-	_, chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
+	chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
 	rs.chunks = int32(chunks)
 	rs.newTableSeq.WriteLocked(&rs.newTable, newFlatTable[K, V](newLen, cpus)) // Release rs
 	m.helpCopyAndWait(rs)
@@ -765,10 +769,19 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 		rs.wg.Wait()
 		return
 	}
-	tableLen := table.mask + 1
+	oldLen := table.mask + 1
+	newLen := newTable.mask + 1
+	// Determines the concurrent task range for destination buckets.
+	// We iterate based on the "Destination Constraint" to allow lock-free
+	// writes:
+	// - Grow (Pow2):   baseLen == oldLen. Source i moves to Dest i, i+baseLen...
+	// - Shrink (Pow2): baseLen == newLen. Source i, i+baseLen... move to Dest i.
+	// By iterating 0..baseLen and processing all aliasing source buckets
+	// (srcIdx += baseLen) in the inner loop, a single goroutine exclusively
+	// owns the write operations for its assigned destination buckets.
+	baseLen := min(newLen, oldLen)
 	chunks := rs.chunks
-	chunkSz := (tableLen + int(chunks) - 1) / int(chunks)
-	isGrowth := (newTable.mask + 1) > tableLen
+	chunkSz := (baseLen + int(chunks) - 1) / int(chunks)
 	for {
 		process := atomic.AddInt32(&rs.process, 1)
 		if process > chunks {
@@ -777,12 +790,8 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 		}
 		process--
 		start := int(process) * chunkSz
-		end := min(start+chunkSz, tableLen)
-		if isGrowth {
-			m.copyBucketGrow(&table, start, end, &newTable)
-		} else {
-			m.copyBucketShrink(&table, start, end, &newTable)
-		}
+		end := min(start+chunkSz, baseLen)
+		m.copyBucket(&table, start, end, oldLen, baseLen, &newTable)
 		if atomic.AddInt32(&rs.completed, 1) == chunks {
 			m.tableSeq.WriteLocked(&m.table, newTable)
 			m.endRebuild(rs)
@@ -791,9 +800,10 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	}
 }
 
-func (m *FlatMap[K, V]) copyBucketGrow(
+func (m *FlatMap[K, V]) copyBucket(
 	table *flatTable[K, V],
 	start, end int,
+	oldLen, baseLen int,
 	newTable *flatTable[K, V],
 ) {
 	mask := newTable.mask
@@ -802,107 +812,55 @@ func (m *FlatMap[K, V]) copyBucketGrow(
 	intKey := m.intKey
 	copied := 0
 	for i := start; i < end; i++ {
-		srcB := table.buckets.At(i)
-		srcB.Lock()
-		for b := srcB; b != nil; b = (*flatBucket[K, V])(b.next) {
-			meta := b.meta
-			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-				j := firstMarkedByteIndex(marked)
-				e := b.At(j).Ptr()
-				var hash uintptr
-				if opt.EmbeddedHash_ {
-					hash = e.GetHash()
-				} else {
-					hash = keyHash(noescape(unsafe.Pointer(&e.Key)), seed)
+		// Visit all source buckets that map to this destination bucket.
+		// In Grow, runs once. In Shrink, runs twice (usually).
+		for srcIdx := i; srcIdx < oldLen; srcIdx += baseLen {
+			srcB := table.buckets.At(srcIdx)
+			srcB.Lock()
+			for b := srcB; b != nil; b = (*flatBucket[K, V])(b.next) {
+				meta := b.meta
+				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
+					j := firstMarkedByteIndex(marked)
+					e := b.At(j).Ptr()
+					var hash uintptr
+					if opt.EmbeddedHash_ {
+						hash = e.GetHash()
+					} else {
+						hash = keyHash(noescape(unsafe.Pointer(&e.Key)), seed)
+					}
+					idx := mask & h1(hash, intKey)
+					destB := newTable.buckets.At(idx)
+					// Append entry to the destination bucket
+					h2v := h2(hash)
+					for {
+						meta := destB.meta
+						empty := (^meta) & metaMask
+						if empty != 0 {
+							emptyIdx := firstMarkedByteIndex(empty)
+							destB.meta = setByte(meta, h2v, emptyIdx)
+							*destB.At(emptyIdx).Ptr() = *e
+							break
+						}
+						next := (*flatBucket[K, V])(destB.next)
+						if next == nil {
+							destB.next = unsafe.Pointer(&flatBucket[K, V]{
+								meta: setByte(metaEmpty, h2v, 0),
+								entries: [entriesPerBucket]seqlockSlot[entry_[K, V]]{
+									{buf: *e},
+								},
+							})
+							break
+						}
+						destB = next
+					}
+					copied++
 				}
-				idx := mask & h1(hash, intKey)
-				destB := newTable.buckets.At(idx)
-				h2v := h2(hash)
-				appendFlatEntry(h2v, e, destB)
-				copied++
 			}
+			srcB.Unlock()
 		}
-		srcB.Unlock()
 	}
 	if copied != 0 {
 		newTable.AddSize(start, copied)
-	}
-}
-
-func (m *FlatMap[K, V]) copyBucketShrink(
-	table *flatTable[K, V],
-	start, end int,
-	newTable *flatTable[K, V],
-) {
-	mask := newTable.mask
-	seed := m.seed
-	keyHash := m.keyHash
-	copied := 0
-	for i := start; i < end; i++ {
-		srcB := table.buckets.At(i)
-		srcB.Lock()
-		idx := i & mask
-		destB := newTable.buckets.At(idx)
-		locked := false
-		for b := srcB; b != nil; b = (*flatBucket[K, V])(b.next) {
-			meta := b.meta
-			if meta&metaMask == 0 {
-				continue
-			}
-			if !locked {
-				locked = true
-				destB.Lock()
-			}
-			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
-				j := firstMarkedByteIndex(marked)
-				e := b.At(j).Ptr()
-				var hash uintptr
-				if opt.EmbeddedHash_ {
-					hash = e.GetHash()
-				} else {
-					hash = keyHash(noescape(unsafe.Pointer(&e.Key)), seed)
-				}
-				h2v := h2(hash)
-				appendFlatEntry(h2v, e, destB)
-				copied++
-			}
-		}
-		if locked {
-			destB.Unlock()
-		}
-		srcB.Unlock()
-	}
-	if copied != 0 {
-		newTable.AddSize(start, copied)
-	}
-}
-
-//go:nosplit
-func appendFlatEntry[K comparable, V any](
-	h2v uint8,
-	e *entry_[K, V],
-	destB *flatBucket[K, V],
-) {
-	for {
-		meta := destB.meta
-		empty := (^meta) & metaMask
-		if empty != 0 {
-			emptyIdx := firstMarkedByteIndex(empty)
-			destB.meta = setByte(meta, h2v, emptyIdx)
-			*destB.At(emptyIdx).Ptr() = *e
-			return
-		}
-		next := (*flatBucket[K, V])(destB.next)
-		if next == nil {
-			destB.next = unsafe.Pointer(&flatBucket[K, V]{
-				meta: setByte(metaEmpty, h2v, 0),
-				entries: [entriesPerBucket]seqlockSlot[entry_[K, V]]{
-					{buf: *e},
-				},
-			})
-			return
-		}
-		destB = next
 	}
 }
 

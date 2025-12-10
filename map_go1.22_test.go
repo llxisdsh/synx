@@ -895,7 +895,7 @@ func TestMapCalcLen(t *testing.T) {
 			float64(tableLen*entriesPerBucket) * loadFactor,
 		)
 		growTableLen = calcTableLen(growThreshold)
-		_, parallelism = calcParallelism(tableLen, minBucketsPerCPU, cpus)
+		parallelism = calcParallelism(tableLen, minBucketsPerCPU, cpus)
 		if tableLen != lastTableLen ||
 			growTableLen != lastGrowTableLen ||
 			sizeLen != lastSizeLen ||
