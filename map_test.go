@@ -1,5 +1,3 @@
-//go:build go1.22
-
 package synx
 
 import (
@@ -16,6 +14,7 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+	"weak"
 )
 
 // ============================================================================
@@ -165,6 +164,10 @@ func init() {
 		testDataIntLarge[i] = i
 	}
 }
+
+// ============================================================================
+// go:build go1.22
+// ============================================================================
 
 func TestMap_BucketOfStructSize(t *testing.T) {
 	t.Logf("CacheLineSize : %d", cacheLineSize)
@@ -7003,4 +7006,148 @@ func TestMap_RangeProcess_WriterBlocking_Verification(t *testing.T) {
 	if val, ok := m.Load(0); !ok || val != 999 {
 		t.Errorf("Expected final value 999, got %v (ok=%v)", val, ok)
 	}
+}
+
+// ============================================================================
+// go:build go1.23
+// ============================================================================
+
+// TestMap_ComputeAll_UpdateDelete verifies Entries iteration can update and delete entries.
+func TestMap_ComputeAll_UpdateDelete(t *testing.T) {
+	m := NewMap[int, int]()
+	const N = 128
+
+	for i := range N {
+		m.Store(i, i)
+	}
+
+	for it := range m.Entries() {
+		if it.Key()%2 == 0 {
+			it.Update(it.Value() + 1)
+		} else {
+			it.Delete()
+		}
+	}
+
+	for i := range N {
+		if i%2 == 0 {
+			v, ok := m.Load(i)
+			if !ok || v != i+1 {
+				t.Fatalf("even key %d: want %d, ok=true; got %v, ok=%v", i, i+1, v, ok)
+			}
+		} else {
+			if _, ok := m.Load(i); ok {
+				t.Fatalf("odd key %d: expected deleted", i)
+			}
+		}
+	}
+}
+
+// TestMap_ComputeAll_EarlyStop verifies breaking the range stops iteration and only a subset is processed.
+func TestMap_ComputeAll_EarlyStop(t *testing.T) {
+	m := NewMap[int, int]()
+	const N = 100
+	for i := range N {
+		m.Store(i, i)
+	}
+
+	processed := 0
+	for it := range m.Entries() {
+		it.Update(it.Value() + 1000)
+		processed++
+		if processed == 10 {
+			break
+		}
+	}
+
+	if processed != 10 {
+		t.Fatalf("processed=%d, want 10", processed)
+	}
+
+	updated := 0
+	for k, v := range m.All() {
+		_ = k
+		if v >= 1000 {
+			updated++
+		}
+	}
+	// 早停时，最后一个回调的修改也会被应用
+	if updated != 10 {
+		t.Fatalf("updated=%d, want 10", updated)
+	}
+}
+
+// ============================================================================
+// go:build go1.24
+// ============================================================================
+
+// TestConcurrentCacheMap tests Map in a scenario where it is used as
+// the basis of a memory-efficient concurrent cache. We're specifically
+// looking to make sure that CompareAndSwap and CompareAndDelete are
+// atomic with respect to one another. When competing for the same
+// key-value pair, they must not both succeed.
+//
+// This test is a regression test for issue #70970.
+func TestConcurrentCacheMap(t *testing.T) {
+	type dummy [32]byte
+
+	var m Map[int, weak.Pointer[dummy]]
+
+	type cleanupArg struct {
+		key   int
+		value weak.Pointer[dummy]
+	}
+	cleanup := func(arg cleanupArg) {
+		m.CompareAndDelete(arg.key, arg.value)
+	}
+	get := func(m *Map[int, weak.Pointer[dummy]], key int) *dummy {
+		nv := new(dummy)
+		nw := weak.Make(nv)
+		for {
+			w, loaded := m.LoadOrStore(key, nw)
+			if !loaded {
+				runtime.AddCleanup(nv, cleanup, cleanupArg{key, nw})
+				return nv
+			}
+			if v := w.Value(); v != nil {
+				return v
+			}
+
+			// Weak pointer was reclaimed, try to replace it with nw.
+			if m.CompareAndSwap(key, w, nw) {
+				runtime.AddCleanup(nv, cleanup, cleanupArg{key, nw})
+				return nv
+			}
+		}
+	}
+
+	// Adjust parameters based on coverage mode to prevent timeouts
+	var N, P int
+	if testing.CoverMode() != "" {
+		// Reduced parameters for coverage mode
+		N = 1_000 // 1,000 goroutines instead of 100,000
+		P = 100   // 100 keys instead of 5,000
+	} else {
+		// Full stress test parameters for normal mode
+		N = 100_000
+		P = 5_000
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := range N {
+		go func() {
+			defer wg.Done()
+			a := get(&m, i%P)
+			b := get(&m, i%P)
+			if a != b {
+				t.Errorf(
+					"consecutive cache reads returned different values: a != b (%p vs %p)\n",
+					a,
+					b,
+				)
+			}
+		}()
+	}
+	wg.Wait()
 }

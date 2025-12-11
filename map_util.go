@@ -407,6 +407,12 @@ func runtime_canSpin(i int) bool
 //goland:noinspection ALL
 func runtime_doSpin()
 
+//go:linkname runtime_semacquire sync.runtime_Semacquire
+func runtime_semacquire(addr *uint32)
+
+//go:linkname runtime_semrelease sync.runtime_Semrelease
+func runtime_semrelease(addr *uint32, handoff bool, skipframes int)
+
 // ============================================================================
 // Hash Utilities
 // ============================================================================

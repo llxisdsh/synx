@@ -31,6 +31,13 @@ Generic, high-performance duplicate suppression (singleflight).
 - **Robust**: Preserves `panic` and `Goexit` semantics (unlike `x/sync/singleflight`).
 - **Fast**: ~20× faster than `singleflight` for same-key operations with near-zero allocations.
 
+### 🔒 Latch & Pulse
+
+Low-overhead synchronization tools built on runtime semaphores.
+
+- **`Latch`**: A one-time signal (One-Way Door). Once `Open()`, all waiters proceed. Ideal for initialization or shutdown signals.
+- **`Pulse`**: A reusable signal (Auto-Closing Door). `Wait()` blocks until the next `Beat()`. Useful for recurring events or phased execution.
+
 ## Quick Start
 
 ### Concurrent Map
@@ -41,13 +48,13 @@ package main
 import "github.com/llxisdsh/synx"
 
 func main() {
-	// 1. Standard Map (Lock-free reads, sync.Map compatible)
-	var m synx.Map[string, int]
-	m.Store("foo", 1)
-	
-	// 2. FlatMap (Seqlock-based, inline storage)
-	fm := synx.NewFlatMap[string, int](synx.WithCapacity(1000))
-	fm.Store("bar", 2)
+    // 1. Standard Map (Lock-free reads, sync.Map compatible)
+    var m synx.Map[string, int]
+    m.Store("foo", 1)
+    
+    // 2. FlatMap (Seqlock-based, inline storage)
+    fm := synx.NewFlatMap[string, int](synx.WithCapacity(1000))
+    fm.Store("bar", 2)
 }
 ```
 
@@ -58,6 +65,28 @@ var g synx.OnceGroup[string, string]
 
 // Coalesce duplicate requests
 val, err, shared := g.Do("key", func() (string, error) {
-	return "expensive-op", nil
+    return "expensive-op", nil
 })
+```
+
+### Latch & Pulse
+
+```go
+// 1. Latch (One-time signal)
+var l synx.Latch
+go func() {
+    // ... initialization ...
+    l.Open()
+}()
+l.Wait() // Blocks until Open()
+
+// 2. Pulse (Reusable signal)
+var p synx.Pulse
+go func() {
+    for {
+        time.Sleep(time.Second)
+        p.Beat() // Wakes all current waiters
+    }
+}()
+p.Wait() // Blocks until next Beat()
 ```

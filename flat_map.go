@@ -5,7 +5,6 @@ package synx
 import (
 	"math/rand/v2"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -46,7 +45,7 @@ type flatRebuildState[K comparable, V any] struct {
 	newTableSeq seqlock[uint32, flatTable[K, V]] // seqlock of new table
 	process     int32                            // atomic
 	completed   int32                            // atomic
-	wg          sync.WaitGroup
+	latch       Latch
 }
 
 type flatTable[K comparable, V any] struct {
@@ -123,14 +122,14 @@ func (m *FlatMap[K, V]) init(
 func (m *FlatMap[K, V]) slowInit() {
 	rs := (*flatRebuildState[K, V])(loadPtr(&m.rs))
 	if rs != nil {
-		rs.wg.Wait()
+		rs.latch.Wait()
 		return
 	}
 	rs, ok := m.beginRebuild(mapRebuildBlockWritersHint)
 	if !ok {
 		rs = (*flatRebuildState[K, V])(loadPtr(&m.rs))
 		if rs != nil {
-			rs.wg.Wait()
+			rs.latch.Wait()
 		}
 		return
 	}
@@ -345,7 +344,7 @@ func (m *FlatMap[K, V]) Compute(
 				}
 			case mapRebuildBlockWritersHint:
 				root.Unlock()
-				rs.wg.Wait()
+				rs.latch.Wait()
 				continue
 			default:
 				// mapRebuildWithWritersHint: allow concurrent writers
@@ -660,7 +659,6 @@ func (m *FlatMap[K, V]) ToMap(limit ...int) map[K]V {
 func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, V], bool) {
 	rs := new(flatRebuildState[K, V])
 	rs.hint = hint
-	rs.wg.Add(1)
 	if !atomic.CompareAndSwapPointer(&m.rs, nil, unsafe.Pointer(rs)) {
 		return nil, false
 	}
@@ -669,7 +667,7 @@ func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, 
 
 func (m *FlatMap[K, V]) endRebuild(rs *flatRebuildState[K, V]) {
 	atomic.StorePointer(&m.rs, nil)
-	rs.wg.Done()
+	rs.latch.Open()
 }
 
 // rebuild reorganizes the map. Only these hints are supported:
@@ -691,7 +689,7 @@ func (m *FlatMap[K, V]) rebuild(
 					continue
 				}
 			default:
-				rs.wg.Wait()
+				rs.latch.Wait()
 			}
 		}
 		if rs, ok := m.beginRebuild(hint); ok {
@@ -766,7 +764,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	table := m.tableSeq.Read(&m.table)
 	newTable := rs.newTableSeq.Read(&rs.newTable) // Acquire rs
 	if newTable.buckets.ptr == table.buckets.ptr {
-		rs.wg.Wait()
+		rs.latch.Wait()
 		return
 	}
 	oldLen := table.mask + 1
@@ -785,7 +783,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	for {
 		process := atomic.AddInt32(&rs.process, 1)
 		if process > chunks {
-			rs.wg.Wait()
+			rs.latch.Wait()
 			return
 		}
 		process--

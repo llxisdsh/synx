@@ -3,7 +3,6 @@ package synx
 import (
 	"math/rand/v2"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -43,7 +42,7 @@ type Map[K comparable, V any] struct {
 // rebuildState represents the current state of a resizing operation
 type rebuildState struct {
 	hint      mapRebuildHint
-	wg        sync.WaitGroup
+	latch     Latch
 	table     unsafe.Pointer // *mapTable
 	newTable  unsafe.Pointer // *mapTable
 	process   int32
@@ -154,7 +153,7 @@ func (m *Map[K, V]) init(
 func (m *Map[K, V]) slowInit() *mapTable {
 	rs := (*rebuildState)(loadPtr(&m.rs))
 	if rs != nil {
-		rs.wg.Wait()
+		rs.latch.Wait()
 		// Now the table should be initialized
 		return (*mapTable)(loadPtr(&m.table))
 	}
@@ -164,7 +163,7 @@ func (m *Map[K, V]) slowInit() *mapTable {
 		// Another goroutine is initializing, wait for it to complete
 		rs = (*rebuildState)(loadPtr(&m.rs))
 		if rs != nil {
-			rs.wg.Wait()
+			rs.latch.Wait()
 		}
 		// Now the table should be initialized
 		return (*mapTable)(loadPtr(&m.table))
@@ -732,7 +731,7 @@ func (m *Map[K, V]) doResize(
 					continue
 				}
 			default:
-				rs.wg.Wait()
+				rs.latch.Wait()
 			}
 		}
 
@@ -896,7 +895,7 @@ func (m *Map[K, V]) computeEntry_(
 				}
 			case mapRebuildBlockWritersHint:
 				root.Unlock()
-				rs.wg.Wait()
+				rs.latch.Wait()
 				table = (*mapTable)(loadPtr(&m.table))
 				continue
 			default:
@@ -1165,7 +1164,6 @@ func (m *Map[K, V]) computeRangeEntry_(
 func (m *Map[K, V]) beginRebuild(hint mapRebuildHint) (*rebuildState, bool) {
 	rs := new(rebuildState)
 	rs.hint = hint
-	rs.wg.Add(1)
 	if !atomic.CompareAndSwapPointer(&m.rs, nil, unsafe.Pointer(rs)) {
 		return nil, false
 	}
@@ -1174,7 +1172,7 @@ func (m *Map[K, V]) beginRebuild(hint mapRebuildHint) (*rebuildState, bool) {
 
 func (m *Map[K, V]) endRebuild(rs *rebuildState) {
 	atomic.StorePointer(&m.rs, nil)
-	rs.wg.Done()
+	rs.latch.Open()
 }
 
 // rebuild reorganizes the map. Only these hints are supported:
@@ -1197,7 +1195,7 @@ func (m *Map[K, V]) rebuild(
 					continue
 				}
 			default:
-				rs.wg.Wait()
+				rs.latch.Wait()
 			}
 		}
 
@@ -1294,7 +1292,7 @@ func (m *Map[K, V]) helpCopyAndWait(rs *rebuildState) {
 		process := atomic.AddInt32(&rs.process, 1)
 		if process > chunks {
 			// Wait copying completed
-			rs.wg.Wait()
+			rs.latch.Wait()
 			return
 		}
 		process--
