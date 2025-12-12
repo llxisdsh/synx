@@ -30,7 +30,7 @@ func TestLatchBasic(t *testing.T) {
 	}
 }
 
-func TestLatchBroadcast(t *testing.T) {
+func TestLatchOpen(t *testing.T) {
 	var e Latch
 	var count int32
 	var wg sync.WaitGroup

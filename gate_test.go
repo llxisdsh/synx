@@ -10,7 +10,7 @@ import (
 func TestGate_Simple(t *testing.T) {
 	var e Gate
 
-	// 1. Initially unsignaled
+	// 1. Initially Close
 	if e.IsOpen() {
 		t.Error("expected unset")
 	}
@@ -29,10 +29,10 @@ func TestGate_Simple(t *testing.T) {
 		// OK
 	}
 
-	// 3. Set
+	// 3. Open
 	e.Open()
 	if !e.IsOpen() {
-		t.Error("expected set")
+		t.Error("expected Open")
 	}
 
 	<-done
@@ -41,17 +41,17 @@ func TestGate_Simple(t *testing.T) {
 	start := time.Now()
 	e.Wait()
 	if time.Since(start) > time.Millisecond*100 {
-		t.Error("Wait not immediate when set")
+		t.Error("Wait not immediate when Open")
 	}
 
-	// 5. Reset
+	// 5. Close
 	e.Close()
 	if e.IsOpen() {
-		t.Error("expected unset after reset")
+		t.Error("expected Close after Close")
 	}
 }
 
-func TestGate_Broadcast(t *testing.T) {
+func TestGate_Open(t *testing.T) {
 	var e Gate
 	var wg sync.WaitGroup
 	const N = 10
@@ -69,19 +69,19 @@ func TestGate_Broadcast(t *testing.T) {
 	wg.Wait() // Should all return
 }
 
-func TestGate_ResetRace(t *testing.T) {
+func TestGate_CloseRace(t *testing.T) {
 	var e Gate
 	const N = 1000
 	var wg sync.WaitGroup
 
 	// Reviewer Note:
-	// This test rapidly Sets and Resets.
+	// This test rapidly Opens and Closes.
 	// We want to ensure that if a thread successfully enters Wait(),
-	// it eventually returns if Set happens.
-	// But since Reset happens too, it might get stuck?
-	// No, Wait() only blocks if !Set.
-	// If it blocks, it needs a Set to wake.
-	// Our test driver will eventually keep it Set.
+	// it eventually returns if Open happens.
+	// But since Close happens too, it might get stuck?
+	// No, Wait() only blocks if !Open.
+	// If it blocks, it needs an Open to wake.
+	// Our test driver will eventually keep it Open.
 
 	wg.Add(N)
 	for range N {
@@ -91,7 +91,7 @@ func TestGate_ResetRace(t *testing.T) {
 		}()
 	}
 
-	// Spam Set/Reset
+	// Spam Open/Close
 	for i := range 100 {
 		e.Open()
 		// yield to let some wake?
@@ -101,7 +101,7 @@ func TestGate_ResetRace(t *testing.T) {
 		e.Close()
 	}
 
-	// Finally open it
+	// Finally Open it
 	e.Open()
 	wg.Wait()
 }
@@ -123,7 +123,7 @@ func TestGate_PingPong(t *testing.T) {
 			for running.Load() {
 				e.Wait()
 				// ... do work ...
-				// yield to simulate work, otherwise we spin too fast on "Set" state
+				// yield to simulate work, otherwise we spin too fast on "Open" state
 				if running.Load() {
 					time.Sleep(time.Microsecond)
 				}

@@ -30,22 +30,22 @@ import (
 type FlatMap[K comparable, V any] struct {
 	_        noCopy
 	table    seqlockSlot[flatTable[K, V]]
-	rs       unsafe.Pointer // *flatRebuildState[K,V]
 	seed     uintptr
 	keyHash  HashFunc
 	tableSeq seqlock32 // seqlock of table
 	shrinkOn bool      // WithAutoShrink
 	intKey   bool
+	rs       flatRebuildState[K, V]
 }
 
 type flatRebuildState[K comparable, V any] struct {
-	hint        mapRebuildHint
+	hint        atomic.Uint32
 	chunks      int32
 	newTable    seqlockSlot[flatTable[K, V]]
 	newTableSeq seqlock32 // seqlock of new table
 	process     int32     // atomic
 	completed   int32     // atomic
-	latch       Latch
+	gate        Gate
 }
 
 type flatTable[K comparable, V any] struct {
@@ -117,21 +117,14 @@ func (m *FlatMap[K, V]) init(
 	tableLen := calcTableLen(cfg.capacity)
 	seqWriteLocked32(&m.tableSeq, &m.table,
 		newFlatTable[K, V](tableLen, runtime.GOMAXPROCS(0)))
+	m.rs.gate.Open()
 }
 
 //go:noinline
 func (m *FlatMap[K, V]) slowInit() {
-	rs := (*flatRebuildState[K, V])(loadPtr(&m.rs))
-	if rs != nil {
-		rs.latch.Wait()
-		return
-	}
 	rs, ok := m.beginRebuild(mapRebuildBlockWritersHint)
 	if !ok {
-		rs = (*flatRebuildState[K, V])(loadPtr(&m.rs))
-		if rs != nil {
-			rs.latch.Wait()
-		}
+		rs.gate.Wait()
 		return
 	}
 	// The table may have been altered prior to our changes.
@@ -335,17 +328,17 @@ func (m *FlatMap[K, V]) Compute(
 		root.Lock()
 
 		// Help finishing rebuild if needed
-		if rs := (*flatRebuildState[K, V])(loadPtr(&m.rs)); rs != nil {
-			switch rs.hint {
+		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
+			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if rs.newTableSeq.WriteCompleted() {
+				if m.rs.newTableSeq.WriteCompleted() {
 					root.Unlock()
-					m.helpCopyAndWait(rs)
+					m.helpCopyAndWait(&m.rs)
 					continue
 				}
 			case mapRebuildBlockWritersHint:
 				root.Unlock()
-				rs.latch.Wait()
+				m.rs.gate.Wait()
 				continue
 			default:
 				// mapRebuildWithWritersHint: allow concurrent writers
@@ -432,7 +425,7 @@ func (m *FlatMap[K, V]) Compute(
 			root.Unlock()
 			table.AddSize(idx, 1)
 			// Auto-grow check (parallel resize)
-			if loadPtr(&m.rs) == nil {
+			if mapRebuildHint(m.rs.hint.Load()) == mapNoHint {
 				tableLen := table.mask + 1
 				size := table.SumSize()
 				const capFactor = float64(entriesPerBucket) * loadFactor
@@ -458,7 +451,7 @@ func (m *FlatMap[K, V]) Compute(
 			table.AddSize(idx, -1)
 			// Check if table shrinking is needed
 			if m.shrinkOn && newMeta&metaDataMask == metaEmpty &&
-				loadPtr(&m.rs) == nil {
+				mapRebuildHint(m.rs.hint.Load()) == mapNoHint {
 				tableLen := table.mask + 1
 				if minTableLen < tableLen {
 					size := table.SumSize()
@@ -659,42 +652,47 @@ func (m *FlatMap[K, V]) ToMap(limit ...int) map[K]V {
 }
 
 func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, V], bool) {
-	rs := new(flatRebuildState[K, V])
-	rs.hint = hint
-	if !atomic.CompareAndSwapPointer(&m.rs, nil, unsafe.Pointer(rs)) {
-		return nil, false
+	rs := &m.rs
+	if !rs.hint.CompareAndSwap(uint32(mapNoHint), uint32(hint)) {
+		return rs, false
 	}
+	rs.chunks = 0
+	rs.process = 0
+	rs.completed = 0
+	rs.newTable = seqlockSlot[flatTable[K, V]]{}
+	rs.newTableSeq = seqlock32{}
+	rs.gate.Close()
 	return rs, true
 }
 
 func (m *FlatMap[K, V]) endRebuild(rs *flatRebuildState[K, V]) {
-	atomic.StorePointer(&m.rs, nil)
-	rs.latch.Open()
+	rs.hint.Store(uint32(mapNoHint))
+	rs.gate.Open()
 }
 
 // rebuild reorganizes the map. Only these hints are supported:
 //   - mapRebuildWithWritersHint: allows concurrent reads/writes
 //   - mapExclusiveRebuildHint: allows concurrent reads
 func (m *FlatMap[K, V]) rebuild(
-	hint mapRebuildHint,
+	rebuildHint mapRebuildHint,
 	fn func(),
 ) {
 	for {
 		// Help finishing rebuild if needed
-		if rs := (*flatRebuildState[K, V])(loadPtr(&m.rs)); rs != nil {
-			switch rs.hint {
+		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
+			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if rs.newTableSeq.WriteCompleted() {
-					m.helpCopyAndWait(rs)
+				if m.rs.newTableSeq.WriteCompleted() {
+					m.helpCopyAndWait(&m.rs)
 				} else {
 					runtime.Gosched()
 					continue
 				}
 			default:
-				rs.latch.Wait()
+				m.rs.gate.Wait()
 			}
 		}
-		if rs, ok := m.beginRebuild(hint); ok {
+		if rs, ok := m.beginRebuild(rebuildHint); ok {
 			fn()
 			m.endRebuild(rs)
 			return
@@ -766,8 +764,9 @@ func (m *FlatMap[K, V]) finalizeResize(
 func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	table := seqRead32(&m.tableSeq, &m.table)
 	newTable := seqRead32(&rs.newTableSeq, &rs.newTable) // Acquire rs
-	if newTable.buckets.ptr == table.buckets.ptr {
-		rs.latch.Wait()
+	if newTable.buckets.ptr == nil ||
+		newTable.buckets.ptr == table.buckets.ptr {
+		rs.gate.Wait()
 		return
 	}
 	oldLen := table.mask + 1
@@ -786,7 +785,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	for {
 		process := atomic.AddInt32(&rs.process, 1)
 		if process > chunks {
-			rs.latch.Wait()
+			rs.gate.Wait()
 			return
 		}
 		process--
