@@ -812,7 +812,7 @@ func (m *Map[K, V]) loadEntry_(
 	h2w := broadcast(h2v)
 	idx := table.mask & h1(hash, m.intKey)
 	for b := table.buckets.At(idx); b != nil; b = (*bucket)(loadPtr(&b.next)) {
-		meta := loadInt(&b.meta)
+		meta := loadUint64(&b.meta)
 		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 			j := firstMarkedByteIndex(marked)
 			if e := (*entry_[K, V])(loadPtr(b.At(j))); e != nil {
@@ -925,7 +925,7 @@ func (m *Map[K, V]) computeEntry_(
 
 	findLoop:
 		for b := root; b != nil; b = (*bucket)(b.next) {
-			meta := loadIntFast(&b.meta)
+			meta := loadUint64Fast(&b.meta)
 			for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				if e := (*entry_[K, V])(*b.At(j)); e != nil {
@@ -980,7 +980,7 @@ func (m *Map[K, V]) computeEntry_(
 			if oldB == root {
 				root.UnlockWithMeta(newMeta)
 			} else {
-				storeInt(&oldB.meta, newMeta)
+				storeUint64(&oldB.meta, newMeta)
 				root.Unlock()
 			}
 			table.AddSize(idx, -1)
@@ -1020,7 +1020,7 @@ func (m *Map[K, V]) computeEntry_(
 			if emptyB == root {
 				root.UnlockWithMeta(newMeta)
 			} else {
-				storeInt(&emptyB.meta, newMeta)
+				storeUint64(&emptyB.meta, newMeta)
 				root.Unlock()
 			}
 			table.AddSize(idx, 1)
@@ -1070,7 +1070,7 @@ func (m *Map[K, V]) rangeEntry_(yield func(e *entry_[K, V]) bool) {
 	}
 	for i := 0; i <= table.mask; i++ {
 		for b := table.buckets.At(i); b != nil; b = (*bucket)(loadPtr(&b.next)) {
-			meta := loadInt(&b.meta)
+			meta := loadUint64(&b.meta)
 			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				if e := (*entry_[K, V])(loadPtr(b.At(j))); e != nil {
@@ -1128,7 +1128,7 @@ func (m *Map[K, V]) computeRangeEntry_(
 			root := table.buckets.At(i)
 			root.Lock()
 			for b := root; b != nil; b = (*bucket)(b.next) {
-				meta := loadIntFast(&b.meta)
+				meta := loadUint64Fast(&b.meta)
 				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 					j := firstMarkedByteIndex(marked)
 					if e := (*entry_[K, V])(*b.At(j)); e != nil {
@@ -1145,7 +1145,7 @@ func (m *Map[K, V]) computeRangeEntry_(
 						} else {
 							storePtr(b.At(j), nil)
 							meta = setByte(meta, slotEmpty, j)
-							storeInt(&b.meta, meta)
+							storeUint64(&b.meta, meta)
 							table.AddSize(i, -1)
 						}
 
@@ -1326,7 +1326,7 @@ func (m *Map[K, V]) copyBucket(
 			srcB := table.buckets.At(srcIdx)
 			srcB.Lock()
 			for b := srcB; b != nil; b = (*bucket)(b.next) {
-				meta := loadIntFast(&b.meta)
+				meta := loadUint64Fast(&b.meta)
 				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 					j := firstMarkedByteIndex(marked)
 					if e := (*entry_[K, V])(*b.At(j)); e != nil {
@@ -1341,11 +1341,11 @@ func (m *Map[K, V]) copyBucket(
 						// Append entry to the destination bucket
 						h2v := h2(hash)
 						for {
-							meta := loadIntFast(&destB.meta)
+							meta := loadUint64Fast(&destB.meta)
 							empty := (^meta) & metaMask
 							if empty != 0 {
 								emptyIdx := firstMarkedByteIndex(empty)
-								storeIntFast(&destB.meta, setByte(meta, h2v, emptyIdx))
+								storeUint64Fast(&destB.meta, setByte(meta, h2v, emptyIdx))
 								*destB.At(emptyIdx) = unsafe.Pointer(e)
 								break
 							}
@@ -1397,7 +1397,7 @@ func (t *mapTable) AddSize(idx, delta int) {
 func (t *mapTable) SumSize() int {
 	var sum uintptr
 	for i := 0; i <= t.sizeMask; i++ {
-		sum += loadInt(&t.size.At(i).c)
+		sum += loadUintptr(&t.size.At(i).c)
 	}
 	return int(sum)
 }
@@ -1406,41 +1406,17 @@ func (t *mapTable) SumSize() int {
 // Uses atomic operations on the meta field to avoid false sharing overhead.
 // Implements optimistic locking with fallback to spinning.
 func (b *bucket) Lock() {
-	cur := loadInt(&b.meta)
-	if atomic.CompareAndSwapUint64(&b.meta, cur&(^opLockMask), cur|opLockMask) {
-		return
-	}
-	b.slowLock()
-}
-
-func (b *bucket) slowLock() {
-	var spins int
-	for !b.tryLock() {
-		delay(&spins)
-	}
-}
-
-//go:nosplit
-func (b *bucket) tryLock() bool {
-	for {
-		cur := loadInt(&b.meta)
-		if cur&opLockMask != 0 {
-			return false
-		}
-		if atomic.CompareAndSwapUint64(&b.meta, cur, cur|opLockMask) {
-			return true
-		}
-	}
+	BitLockUint64(&b.meta, opLockMask)
 }
 
 //go:nosplit
 func (b *bucket) Unlock() {
-	atomic.StoreUint64(&b.meta, loadIntFast(&b.meta)&^opLockMask)
+	BitUnlockUint64(&b.meta, opLockMask)
 }
 
 //go:nosplit
 func (b *bucket) UnlockWithMeta(meta uint64) {
-	atomic.StoreUint64(&b.meta, meta&^opLockMask)
+	BitUnlockWithStoreUint64(&b.meta, opLockMask, meta)
 }
 
 //go:nosplit

@@ -22,7 +22,7 @@ type bigSeq struct {
 
 func TestSeqlock_NoTornRead(t *testing.T) {
 	var a seqlockSlot[bigSeq]
-	var sl seqlock[uint32, bigSeq]
+	var sl seqlock32[bigSeq]
 
 	x0 := uint64(3)
 	v0 := bigSeq{A: x0, B: ^x0, C: x0 ^ 0xAA, D: ^(x0 ^ 0xAA)}
@@ -68,7 +68,7 @@ func TestSeqlock_NoTornRead(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.Read(&a)
+					v := seqRead32(&sl, &a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -95,7 +95,7 @@ func TestSeqlock_NoTornRead(t *testing.T) {
 
 func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 	var a seqlockSlot[bigSeq]
-	var sl seqlock[uint32, bigSeq]
+	var sl seqlock32[bigSeq]
 
 	x0 := uint64(11)
 	v0 := bigSeq{A: x0, B: ^x0, C: x0 ^ 0x33, D: ^(x0 ^ 0x33)}
@@ -142,7 +142,7 @@ func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.Read(&a)
+					v := seqRead32(&sl, &a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -176,7 +176,7 @@ func TestSeqlock_ContinuousWritersProgress(t *testing.T) {
 
 func TestSeqlock_AddStyleWriterProducesTornReads(t *testing.T) {
 	var a seqlockSlot[bigSeq]
-	var sl seqlock[uint32, bigSeq]
+	var sl seqlock32[bigSeq]
 
 	x0 := uint64(31)
 	v0 := bigSeq{A: x0, B: ^x0, C: x0 ^ 0xCC, D: ^(x0 ^ 0xCC)}
@@ -224,7 +224,7 @@ func TestSeqlock_AddStyleWriterProducesTornReads(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.Read(&a)
+					v := seqRead32(&sl, &a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -251,7 +251,7 @@ func TestSeqlock_AddStyleWriterProducesTornReads(t *testing.T) {
 
 func TestSeqlock_AddStyleWriterWithLock_NoTornRead(t *testing.T) {
 	var a seqlockSlot[bigSeq]
-	var sl seqlock[uint32, bigSeq]
+	var sl seqlock32[bigSeq]
 	var mu sync.Mutex
 
 	x0 := uint64(41)
@@ -302,7 +302,7 @@ func TestSeqlock_AddStyleWriterWithLock_NoTornRead(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					v := sl.Read(&a)
+					v := seqRead32(&sl, &a)
 					if v.B != ^v.A || v.D != ^v.C {
 						errors.Add(1)
 					}
@@ -339,7 +339,7 @@ type ptrSeq struct {
 
 func TestSeqlock_UnfencedCopy_PointerStruct_NoTornRead(t *testing.T) {
 	var a seqlockSlot[ptrSeq]
-	var sl seqlock[uint32, ptrSeq]
+	var sl seqlock32[ptrSeq]
 
 	x0 := uint64(7)
 	p1 := new(uint64)
@@ -488,7 +488,7 @@ type ptrSeqF struct {
 
 func TestSeqlock_UnfencedCopy_PointerStruct_Finalizer_Safety(t *testing.T) {
 	var a seqlockSlot[ptrSeqF]
-	var sl seqlock[uint32, ptrSeqF]
+	var sl seqlock32[ptrSeqF]
 
 	s0 := "init"
 	v0 := ptrSeqF{S: &s0, M: make(map[string]*fobj), Z: 1}
@@ -609,7 +609,7 @@ func TestSeqlock_UnfencedCopy_PointerStruct_Finalizer_HardPressure(t *testing.T)
 		t.Skip("skipping hard-pressure finalizer test in short mode")
 	}
 	var a seqlockSlot[ptrSeqF]
-	var sl seqlock[uint32, ptrSeqF]
+	var sl seqlock32[ptrSeqF]
 
 	old := debug.SetGCPercent(10)
 	defer debug.SetGCPercent(old)

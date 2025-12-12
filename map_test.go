@@ -87,8 +87,8 @@ func (s *mapStats) String() string {
 // so it should be used only for diagnostics or debugging purposes.
 func (m *Map[K, V]) stats() *mapStats {
 	stats := &mapStats{
-		TotalGrowths: loadInt(&m.growths),
-		TotalShrinks: loadInt(&m.shrinks),
+		TotalGrowths: atomic.LoadUint32(&m.growths),
+		TotalShrinks: atomic.LoadUint32(&m.shrinks),
 		MinEntries:   math.MaxInt,
 	}
 	table := (*mapTable)(loadPtr(&m.table))
@@ -105,7 +105,7 @@ func (m *Map[K, V]) stats() *mapStats {
 			entriesLocal := 0
 			stats.Capacity += entriesPerBucket
 
-			meta := loadInt(&b.meta)
+			meta := loadUint64(&b.meta)
 			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				if e := (*entry_[K, V])(loadPtr(b.At(j))); e != nil {
@@ -166,7 +166,7 @@ func init() {
 }
 
 // ============================================================================
-// go:build go1.22
+// go1.22
 // ============================================================================
 
 func TestMap_BucketOfStructSize(t *testing.T) {
@@ -7009,7 +7009,7 @@ func TestMap_RangeProcess_WriterBlocking_Verification(t *testing.T) {
 }
 
 // ============================================================================
-// go:build go1.23
+// go1.23
 // ============================================================================
 
 // TestMap_ComputeAll_UpdateDelete verifies Entries iteration can update and delete entries.
@@ -7078,7 +7078,7 @@ func TestMap_ComputeAll_EarlyStop(t *testing.T) {
 }
 
 // ============================================================================
-// go:build go1.24
+// go1.24
 // ============================================================================
 
 // TestConcurrentCacheMap tests Map in a scenario where it is used as
@@ -7150,4 +7150,87 @@ func TestConcurrentCacheMap(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// ============================================================================
+// Benchmark
+// ============================================================================
+
+func BenchmarkMapLoadSmall(b *testing.B) {
+	benchmarkMapLoad(b, testDataSmall[:])
+}
+
+func BenchmarkMapLoad(b *testing.B) {
+	benchmarkMapLoad(b, testData[:])
+}
+
+func BenchmarkMapLoadLarge(b *testing.B) {
+	benchmarkMapLoad(b, testDataLarge[:])
+}
+
+func benchmarkMapLoad(b *testing.B, data []string) {
+	b.ReportAllocs()
+	var m Map[string, int]
+	for i := range data {
+		m.LoadOrStore(data[i], i)
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.Load(data[i])
+			i++
+			if i >= len(data) {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkMapLoadOrStore(b *testing.B) {
+	benchmarkMapLoadOrStore(b, testData[:])
+}
+
+func BenchmarkMapLoadOrStoreLarge(b *testing.B) {
+	benchmarkMapLoadOrStore(b, testDataLarge[:])
+}
+
+func benchmarkMapLoadOrStore(b *testing.B, data []string) {
+	b.ReportAllocs()
+	var m Map[string, int]
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.LoadOrStore(data[i], i)
+			i++
+			if i >= len(data) {
+				i = 0
+			}
+		}
+	})
+}
+
+func BenchmarkMapLoadOrStoreInt(b *testing.B) {
+	benchmarkMapLoadOrStoreInt(b, testDataInt[:])
+}
+
+func BenchmarkMapLoadOrStoreIntLarge(b *testing.B) {
+	benchmarkMapLoadOrStoreInt(b, testDataIntLarge[:])
+}
+
+func benchmarkMapLoadOrStoreInt(b *testing.B, data []int) {
+	b.ReportAllocs()
+	var m Map[int, int]
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			_, _ = m.LoadOrStore(data[i], i)
+			i++
+			if i >= len(data) {
+				i = 0
+			}
+		}
+	})
 }

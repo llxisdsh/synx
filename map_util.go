@@ -264,9 +264,9 @@ func h1(h uintptr, intKey bool) int {
 	}
 	if enableHashSpread {
 		return int(spread(h)) >> 7
-	} else {
-		return int(h) >> 7
 	}
+
+	return int(h) >> 7
 }
 
 // h2 extracts the byte-level hash for in-bucket lookups.
@@ -275,9 +275,9 @@ func h1(h uintptr, intKey bool) int {
 func h2(h uintptr) uint8 {
 	if enableHashSpread {
 		return uint8(spread(h)) | slotMask
-	} else {
-		return uint8(h) | slotMask
 	}
+
+	return uint8(h) | slotMask
 }
 
 // broadcast replicates a byte value across all bytes of an uint64.
@@ -437,9 +437,9 @@ func defaultHasher[K comparable, V any]() (
 	case uint64, int64:
 		if intSize == 64 {
 			return hashUint64, valEqual, true
-		} else {
-			return hashUint64On32Bit, valEqual, true
 		}
+
+		return hashUint64On32Bit, valEqual, true
 	case uint32, int32:
 		return hashUint32, valEqual, true
 	case uint16, int16:
@@ -463,9 +463,9 @@ func defaultHasher[K comparable, V any]() (
 		case reflect.Int64, reflect.Uint64:
 			if intSize == 64 {
 				return hashUint64, valEqual, true
-			} else {
-				return hashUint64On32Bit, valEqual, true
 			}
+
+			return hashUint64On32Bit, valEqual, true
 		case reflect.Int32, reflect.Uint32:
 			return hashUint32, valEqual, true
 		case reflect.Int16, reflect.Uint16:
@@ -638,18 +638,20 @@ const noRaceTSO_ = !opt.Race_ && isTSO_
 // loadPtr loads a pointer atomically on non-TSO architectures.
 // On TSO architectures, it performs a plain pointer load.
 //
+//nolint:unused
 //go:nosplit
 func loadPtr(addr *unsafe.Pointer) unsafe.Pointer {
 	if noRaceTSO_ {
 		return *addr
-	} else {
-		return atomic.LoadPointer(addr)
 	}
+
+	return atomic.LoadPointer(addr)
 }
 
 // storePtr stores a pointer atomically on non-TSO architectures.
 // On TSO architectures, it performs a plain pointer store.
 //
+//nolint:unused
 //go:nosplit
 func storePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 	if noRaceTSO_ {
@@ -659,65 +661,127 @@ func storePtr(addr *unsafe.Pointer, val unsafe.Pointer) {
 	}
 }
 
-// loadInt aligned integer load; plain on TSO when width matches,
-// otherwise atomic
-//
+//nolint:unused
 //go:nosplit
-func loadInt[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
-	if unsafe.Sizeof(T(0)) == 4 {
-		if noRaceTSO_ {
-			return *addr
-		} else {
-			return T(atomic.LoadUint32((*uint32)(unsafe.Pointer(addr))))
-		}
-	} else {
-		if noRaceTSO_ && intSize == 64 {
-			return *addr
-		} else {
-			return T(atomic.LoadUint64((*uint64)(unsafe.Pointer(addr))))
-		}
-	}
-}
-
-// storeInt aligned integer store; plain on TSO when width matches,
-// otherwise atomic
-//
-//go:nosplit
-func storeInt[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
-	if unsafe.Sizeof(T(0)) == 4 {
-		if noRaceTSO_ {
-			*addr = val
-		} else {
-			atomic.StoreUint32((*uint32)(unsafe.Pointer(addr)), uint32(val))
-		}
-	} else {
-		if noRaceTSO_ && intSize == 64 {
-			*addr = val
-		} else {
-			atomic.StoreUint64((*uint64)(unsafe.Pointer(addr)), uint64(val))
-		}
-	}
-}
-
-// loadIntFast performs a non-atomic read, safe only when the caller holds
-// a relevant lock or is within a seqlock read window.
-//
-//go:nosplit
-func loadIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T) T {
-	if opt.Race_ {
-		return loadInt(addr)
-	} else {
+func loadUint64(addr *uint64) uint64 {
+	if noRaceTSO_ && intSize == 64 {
 		return *addr
 	}
+
+	return atomic.LoadUint64(addr)
 }
 
-// storeIntFast performs a non-atomic write, safe only for thread-private or
+//nolint:unused
+//go:nosplit
+func storeUint64(addr *uint64, val uint64) {
+	if noRaceTSO_ && intSize == 64 {
+		*addr = val
+	} else {
+		atomic.StoreUint64(addr, val)
+	}
+}
+
+//nolint:unused
+//go:nosplit
+func loadUint32(addr *uint32) uint32 {
+	if noRaceTSO_ {
+		return *addr
+	}
+
+	return atomic.LoadUint32(addr)
+}
+
+//nolint:unused
+//go:nosplit
+func storeUint32(addr *uint32, val uint32) {
+	if noRaceTSO_ {
+		*addr = val
+	} else {
+		atomic.StoreUint32(addr, val)
+	}
+}
+
+//nolint:unused
+//go:nosplit
+func loadUintptr(addr *uintptr) uintptr {
+	if noRaceTSO_ {
+		return *addr
+	}
+
+	return atomic.LoadUintptr(addr)
+}
+
+//nolint:unused
+//go:nosplit
+func storeUintptr(addr *uintptr, val uintptr) {
+	if noRaceTSO_ {
+		*addr = val
+	} else {
+		atomic.StoreUintptr(addr, val)
+	}
+}
+
+// loadUint64Fast performs a non-atomic read, safe only when the caller holds
+// a relevant lock or is within a seqlock read window.
+//
+//nolint:unused
+//go:nosplit
+func loadUint64Fast(addr *uint64) uint64 {
+	if opt.Race_ {
+		return atomic.LoadUint64(addr)
+	}
+
+	return *addr
+}
+
+// storeUint64Fast performs a non-atomic write, safe only for thread-private or
 // not-yet-published memory locations.
 //
+//nolint:unused
 //go:nosplit
-func storeIntFast[T ~uint32 | ~uint64 | ~uintptr](addr *T, val T) {
+func storeUint64Fast(addr *uint64, val uint64) {
 	if opt.Race_ {
-		storeInt(addr, val)
+		atomic.StoreUint64(addr, val)
+	} else {
+		*addr = val
+	}
+}
+
+//nolint:unused
+//go:nosplit
+func loadUint32Fast(addr *uint32) uint32 {
+	if opt.Race_ {
+		return atomic.LoadUint32(addr)
+	}
+
+	return *addr
+}
+
+//nolint:unused
+//go:nosplit
+func storeUint32Fast(addr *uint32, val uint32) {
+	if opt.Race_ {
+		atomic.StoreUint32(addr, val)
+	} else {
+		*addr = val
+	}
+}
+
+//nolint:unused
+//go:nosplit
+func loadUintptrFast(addr *uintptr) uintptr {
+	if opt.Race_ {
+		return atomic.LoadUintptr(addr)
+	}
+
+	return *addr
+}
+
+//nolint:unused
+//go:nosplit
+func storeUintptrFast(addr *uintptr, val uintptr) {
+	if opt.Race_ {
+		atomic.StoreUintptr(addr, val)
 	} else {
 		*addr = val
 	}

@@ -33,8 +33,8 @@ type FlatMap[K comparable, V any] struct {
 	rs       unsafe.Pointer // *flatRebuildState[K,V]
 	seed     uintptr
 	keyHash  HashFunc
-	tableSeq seqlock[uint32, flatTable[K, V]] // seqlock of table
-	shrinkOn bool                             // WithAutoShrink
+	tableSeq seqlock32[flatTable[K, V]] // seqlock of table
+	shrinkOn bool                       // WithAutoShrink
 	intKey   bool
 }
 
@@ -42,9 +42,9 @@ type flatRebuildState[K comparable, V any] struct {
 	hint        mapRebuildHint
 	chunks      int32
 	newTable    seqlockSlot[flatTable[K, V]]
-	newTableSeq seqlock[uint32, flatTable[K, V]] // seqlock of new table
-	process     int32                            // atomic
-	completed   int32                            // atomic
+	newTableSeq seqlock32[flatTable[K, V]] // seqlock of new table
+	process     int32                      // atomic
+	completed   int32                      // atomic
 	latch       Latch
 }
 
@@ -57,9 +57,9 @@ type flatTable[K comparable, V any] struct {
 
 type flatBucket[K comparable, V any] struct {
 	_       [0]atomic.Uint64
-	meta    uint64                         // op byte + h2 bytes
-	seq     seqlock[uintptr, entry_[K, V]] // seqlock of bucket
-	next    unsafe.Pointer                 // *flatBucket[K,V]
+	meta    uint64                // op byte + h2 bytes
+	seq     seqlock[entry_[K, V]] // seqlock of bucket
+	next    unsafe.Pointer        // *flatBucket[K,V]
 	entries [entriesPerBucket]seqlockSlot[entry_[K, V]]
 }
 
@@ -134,7 +134,7 @@ func (m *FlatMap[K, V]) slowInit() {
 		return
 	}
 	// The table may have been altered prior to our changes.
-	table := m.tableSeq.Read(&m.table)
+	table := seqRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr != nil {
 		m.endRebuild(rs)
 		return
@@ -152,7 +152,7 @@ func (m *FlatMap[K, V]) slowInit() {
 //     instability.
 //   - Provides stable latency under high concurrency.
 func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
-	table := m.tableSeq.Read(&m.table)
+	table := seqRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return *new(V), false
 	}
@@ -320,7 +320,7 @@ func (m *FlatMap[K, V]) Compute(
 	fn func(e *Entry[K, V]),
 ) (actual V, loaded bool) {
 	for {
-		table := m.tableSeq.Read(&m.table)
+		table := seqRead32(&m.tableSeq, &m.table)
 		if table.buckets.ptr == nil {
 			m.slowInit()
 			continue
@@ -350,7 +350,7 @@ func (m *FlatMap[K, V]) Compute(
 				// mapRebuildWithWritersHint: allow concurrent writers
 			}
 		}
-		if m.tableSeq.Read(&m.table).buckets.ptr != table.buckets.ptr {
+		if seqRead32(&m.tableSeq, &m.table).buckets.ptr != table.buckets.ptr {
 			root.Unlock()
 			continue
 		}
@@ -415,7 +415,7 @@ func (m *FlatMap[K, V]) Compute(
 				emptyB.At(emptyIdx).WriteUnfenced(it.entry)
 				// emptyB.seq.WriteBarrier()
 				newMeta := setByte(emptyMeta, h2v, emptyIdx)
-				storeInt(&emptyB.meta, newMeta)
+				storeUint64(&emptyB.meta, newMeta)
 
 				root.Unlock()
 				table.AddSize(idx, 1)
@@ -448,7 +448,7 @@ func (m *FlatMap[K, V]) Compute(
 			// Delete: update meta first so new Readers skip this slot immediately.
 			// Active Readers will see seq change and retry, then see h2=0.
 			newMeta := setByte(oldMeta, slotEmpty, oldIdx)
-			storeInt(&oldB.meta, newMeta)
+			storeUint64(&oldB.meta, newMeta)
 			oldB.seq.BeginWriteLocked()
 			oldB.At(oldIdx).WriteUnfenced(entry_[K, V]{})
 			oldB.seq.EndWriteLocked()
@@ -482,7 +482,7 @@ func (m *FlatMap[K, V]) Compute(
 //   - Yields outside of locks to minimize contention.
 //   - Returning false from the callback stops iteration early.
 func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
-	table := m.tableSeq.Read(&m.table)
+	table := seqRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return
 	}
@@ -559,7 +559,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 	}
 
 	m.rebuild(hint, func() {
-		table := m.tableSeq.Read(&m.table)
+		table := seqRead32(&m.tableSeq, &m.table)
 		if table.buckets.ptr == nil {
 			return
 		}
@@ -584,7 +584,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 						b.seq.EndWriteLocked()
 					case deleteOp:
 						meta = setByte(meta, slotEmpty, j)
-						storeInt(&b.meta, meta)
+						storeUint64(&b.meta, meta)
 						b.seq.BeginWriteLocked()
 						e.WriteUnfenced(entry_[K, V]{})
 						b.seq.EndWriteLocked()
@@ -618,7 +618,7 @@ func (m *FlatMap[K, V]) Entries(
 // This operation sums counters across all size stripes for an approximate
 // count.
 func (m *FlatMap[K, V]) Size() int {
-	table := m.tableSeq.Read(&m.table)
+	table := seqRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return 0
 	}
@@ -628,7 +628,7 @@ func (m *FlatMap[K, V]) Size() int {
 
 // Clear clears all key-value pairs from the map.
 func (m *FlatMap[K, V]) Clear() {
-	table := m.tableSeq.Read(&m.table)
+	table := seqRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return
 	}
@@ -761,8 +761,8 @@ func (m *FlatMap[K, V]) finalizeResize(
 
 //go:noinline
 func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
-	table := m.tableSeq.Read(&m.table)
-	newTable := rs.newTableSeq.Read(&rs.newTable) // Acquire rs
+	table := seqRead32(&m.tableSeq, &m.table)
+	newTable := seqRead32(&rs.newTableSeq, &rs.newTable) // Acquire rs
 	if newTable.buckets.ptr == table.buckets.ptr {
 		rs.latch.Wait()
 		return
@@ -883,7 +883,7 @@ func (t *flatTable[K, V]) AddSize(idx, delta int) {
 func (t *flatTable[K, V]) SumSize() int {
 	var sum uintptr
 	for i := 0; i <= t.sizeMask; i++ {
-		sum += loadInt(&t.size.At(i).c)
+		sum += loadUintptr(&t.size.At(i).c)
 	}
 	return int(sum)
 }
@@ -897,34 +897,10 @@ func (b *flatBucket[K, V]) At(i int) *seqlockSlot[entry_[K, V]] {
 }
 
 func (b *flatBucket[K, V]) Lock() {
-	cur := loadInt(&b.meta)
-	if atomic.CompareAndSwapUint64(&b.meta, cur&(^opLockMask), cur|opLockMask) {
-		return
-	}
-	b.slowLock()
-}
-
-func (b *flatBucket[K, V]) slowLock() {
-	var spins int
-	for !b.tryLock() {
-		delay(&spins)
-	}
-}
-
-//go:nosplit
-func (b *flatBucket[K, V]) tryLock() bool {
-	for {
-		cur := loadInt(&b.meta)
-		if cur&opLockMask != 0 {
-			return false
-		}
-		if atomic.CompareAndSwapUint64(&b.meta, cur, cur|opLockMask) {
-			return true
-		}
-	}
+	BitLockUint64(&b.meta, opLockMask)
 }
 
 //go:nosplit
 func (b *flatBucket[K, V]) Unlock() {
-	atomic.StoreUint64(&b.meta, b.meta&^opLockMask)
+	BitUnlockUint64(&b.meta, opLockMask)
 }
