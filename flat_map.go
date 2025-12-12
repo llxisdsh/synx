@@ -33,8 +33,8 @@ type FlatMap[K comparable, V any] struct {
 	rs       unsafe.Pointer // *flatRebuildState[K,V]
 	seed     uintptr
 	keyHash  HashFunc
-	tableSeq seqlock32[flatTable[K, V]] // seqlock of table
-	shrinkOn bool                       // WithAutoShrink
+	tableSeq seqlock32 // seqlock of table
+	shrinkOn bool      // WithAutoShrink
 	intKey   bool
 }
 
@@ -42,9 +42,9 @@ type flatRebuildState[K comparable, V any] struct {
 	hint        mapRebuildHint
 	chunks      int32
 	newTable    seqlockSlot[flatTable[K, V]]
-	newTableSeq seqlock32[flatTable[K, V]] // seqlock of new table
-	process     int32                      // atomic
-	completed   int32                      // atomic
+	newTableSeq seqlock32 // seqlock of new table
+	process     int32     // atomic
+	completed   int32     // atomic
 	latch       Latch
 }
 
@@ -57,9 +57,9 @@ type flatTable[K comparable, V any] struct {
 
 type flatBucket[K comparable, V any] struct {
 	_       [0]atomic.Uint64
-	meta    uint64                // op byte + h2 bytes
-	seq     seqlock[entry_[K, V]] // seqlock of bucket
-	next    unsafe.Pointer        // *flatBucket[K,V]
+	meta    uint64         // op byte + h2 bytes
+	seq     seqlock        // seqlock of bucket
+	next    unsafe.Pointer // *flatBucket[K,V]
 	entries [entriesPerBucket]seqlockSlot[entry_[K, V]]
 }
 
@@ -115,7 +115,8 @@ func (m *FlatMap[K, V]) init(
 	m.seed = uintptr(rand.Uint64())
 	m.shrinkOn = cfg.autoShrink
 	tableLen := calcTableLen(cfg.capacity)
-	m.tableSeq.WriteLocked(&m.table, newFlatTable[K, V](tableLen, runtime.GOMAXPROCS(0)))
+	seqWriteLocked32(&m.tableSeq, &m.table,
+		newFlatTable[K, V](tableLen, runtime.GOMAXPROCS(0)))
 }
 
 //go:noinline
@@ -634,7 +635,8 @@ func (m *FlatMap[K, V]) Clear() {
 	}
 
 	m.rebuild(mapRebuildBlockWritersHint, func() {
-		m.tableSeq.WriteLocked(&m.table, newFlatTable[K, V](minTableLen, runtime.GOMAXPROCS(0)))
+		seqWriteLocked32(&m.tableSeq, &m.table,
+			newFlatTable[K, V](minTableLen, runtime.GOMAXPROCS(0)))
 	})
 }
 
@@ -755,7 +757,8 @@ func (m *FlatMap[K, V]) finalizeResize(
 	overCpus := cpus * resizeOverPartition
 	chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
 	rs.chunks = int32(chunks)
-	rs.newTableSeq.WriteLocked(&rs.newTable, newFlatTable[K, V](newLen, cpus)) // Release rs
+	seqWriteLocked32(&rs.newTableSeq, &rs.newTable,
+		newFlatTable[K, V](newLen, cpus)) // Release rs
 	m.helpCopyAndWait(rs)
 }
 
@@ -791,7 +794,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 		end := min(start+chunkSz, baseLen)
 		m.copyBucket(&table, start, end, oldLen, baseLen, &newTable)
 		if atomic.AddInt32(&rs.completed, 1) == chunks {
-			m.tableSeq.WriteLocked(&m.table, newTable)
+			seqWriteLocked32(&m.tableSeq, &m.table, newTable)
 			m.endRebuild(rs)
 			return
 		}
