@@ -27,6 +27,7 @@ type lockGroupEntry struct {
 	ref int32
 }
 
+// Lock acquires the lock for the given key.
 func (g *TicketLockGroup[K]) Lock(k K) {
 	v, _ := g.m.Compute(k, func(e *Entry[K, *lockGroupEntry]) {
 		val := e.Value()
@@ -39,6 +40,7 @@ func (g *TicketLockGroup[K]) Lock(k K) {
 	v.mu.Lock()
 }
 
+// Unlock releases the lock for the given key.
 func (g *TicketLockGroup[K]) Unlock(k K) {
 	v, ok := g.m.Load(k)
 	if !ok {

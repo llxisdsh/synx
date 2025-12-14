@@ -31,6 +31,7 @@ type rwLockGroupEntry struct {
 	ref int32
 }
 
+// Lock acquires an exclusive write lock for the given key.
 func (g *RWLockGroup[K]) Lock(k K) {
 	v, _ := g.m.Compute(k, func(e *Entry[K, *rwLockGroupEntry]) {
 		val := e.Value()
@@ -43,6 +44,7 @@ func (g *RWLockGroup[K]) Lock(k K) {
 	v.mu.Lock()
 }
 
+// Unlock releases the write lock for the given key.
 func (g *RWLockGroup[K]) Unlock(k K) {
 	v, ok := g.m.Load(k)
 	if !ok {
@@ -62,6 +64,7 @@ func (g *RWLockGroup[K]) Unlock(k K) {
 	})
 }
 
+// RLock acquires a shared read lock for the given key.
 func (g *RWLockGroup[K]) RLock(k K) {
 	v, _ := g.m.Compute(k, func(e *Entry[K, *rwLockGroupEntry]) {
 		val := e.Value()
@@ -74,6 +77,7 @@ func (g *RWLockGroup[K]) RLock(k K) {
 	v.mu.RLock()
 }
 
+// RUnlock releases the read lock for the given key.
 func (g *RWLockGroup[K]) RUnlock(k K) {
 	v, ok := g.m.Load(k)
 	if !ok {

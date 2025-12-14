@@ -30,6 +30,7 @@ type TicketLock struct {
 	serving atomic.Uint32
 }
 
+// Lock acquires the lock. Blocks until the lock is available.
 func (m *TicketLock) Lock() {
 	my := m.next.Add(1) - 1
 	var spins int
@@ -41,6 +42,7 @@ func (m *TicketLock) Lock() {
 	}
 }
 
+// Unlock releases the lock.
 func (m *TicketLock) Unlock() {
 	m.serving.Add(1)
 }

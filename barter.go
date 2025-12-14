@@ -36,6 +36,7 @@ type barterItem[T any] struct {
 	match *T    // Pointer to store the matched value
 }
 
+// NewBarter creates a new Barter exchanger.
 func NewBarter[T any]() *Barter[T] {
 	return &Barter[T]{}
 }

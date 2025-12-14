@@ -38,13 +38,19 @@ Atomic, low-overhead coordination tools built on runtime semaphores.
 | Primitive | Metaphor | Behavior | Key Usage |
 |:---|:---|:---|:---|
 | **`Latch`** | **One-time Door** | Starts closed. Once `Open()`, stays open forever. | Initialization, Shutdown signal. |
-| **`Gate`** | **Manual Door** | Can be `Open()` and `Close()` repeatedly. | Pausing/Resuming workers. |
-| **`Pulse`** | **Heartbeat** | `Wait()` blocks until the *next* `Beat()`. No state retention. | Broadcasts, Periodic wakeups. |
+| **`Gate`** | **Manual Door** | `Open()`/`Close()`/`Pulse()`. Supports broadcast wakeups. | Pausing/Resuming, Cond-like signals. |
 | **`Rally`** | **Meeting Point** | `Meet(n)` waits until n parties arrive, then releases all. | CyclicBarrier, MapReduce stages. |
-| **`Semaphore`**| **Parking Lot** | `Acquire(n)` / `Release(n)` tokens. | Rate limiting, Resource pools. |
+| **`FairSemaphore`**| **FIFO Queue** | Strict FIFO ordering for permit acquisition. | Anti-starvation scenarios. |
+| **`Epoch`** | **Milestone** | `WaitAtLeast(n)` blocks until counter reaches n. No thundering herd. | Phase coordination, Version gates. |
+| **`Phaser`** | **Dynamic Barrier** | Dynamic party registration with split-phase `Arrive()`/`AwaitAdvance()`. | Java-style Phaser, Pipeline stages. |
 | **`BitLock`** | **Bit Lock** | Spins on a specific bit mask. | Fine-grained, memory-constrained locks. |
+| **`TicketLock`** | **Ticket Queue** | FIFO spin-lock with ticket algorithm. | Fair mutex, Latency-sensitive paths. |
+| **`RWLock`** | **Read-Write Lock** | Spin-based R/W lock, writer-preferred. | Read-heavy, low-latency access. |
+| **`TicketLockGroup`** | **Keyed Lock** | Per-key locking with auto-cleanup. | User/Resource isolation. |
+| **`RWLockGroup`** | **Keyed R/W Lock** | Per-key R/W locking with auto-cleanup. | Config/Data partitioning. |
+| **`Barter`** | **Exchanger** | Two goroutines swap values at a sync point. | Producer-Consumer handoff. |
 
-> **Design Philosophy**: Zero allocation on hot paths, 8-16 bytes footprint, direct `runtime_semacquire` integration for maximum efficiency.
+> **Design Philosophy**: Minimal footprint, direct `runtime_semacquire` integration. Most primitives are zero-alloc on hot paths.
 
 ## Quick Start
 
@@ -79,43 +85,33 @@ val, err, shared := g.Do("key", func() (string, error) {
 ### Primitives Gallery
 
 ```go
-// 1. Latch (One-shot)
+// Latch: One-shot signal
 var l synx.Latch
-go func() { l.Open() }() 
-l.Wait() // Returns immediately if already open
+go func() { l.Open() }()
+l.Wait()
 
-// 2. Gate (Reusable)
+// Gate: Reusable open/close + broadcast
 var g synx.Gate
-g.Open()  // All waiters pass
-g.Close() // Subsequent waiters block
-g.Wait()
+g.Open()   // All waiters pass
+g.Close()  // Future waiters block
+g.Pulse()  // Wake current waiters only (stays closed)
 
-// 3. Pulse (Notification)
-var p synx.Pulse
-go func() {
-    for {
-        time.Sleep(time.Second) 
-        p.Beat() // Wakes all CURRENT waiters
-    }
-}()
-p.Wait() // Blocks until NEXT beat
-
-// 4. Rally (Cyclic Barrier)
+// Rally: Cyclic barrier
 var r synx.Rally
-// Wait for 3 goroutines to arrive
-r.Meet(3) // All 3 block until the 3rd one arrives
+r.Meet(3)  // Blocks until 3 parties arrive
 
-// 5. Semaphore (Counting)
-s := synx.NewSemaphore(10) // 10 permits
-s.Acquire(1)
-defer s.Release(1)
+// Epoch: Milestone waiter
+var e synx.Epoch
+go func() { e.Add(5) }()
+e.WaitAtLeast(5)  // No thundering herd
 
-// 6. BitLock (Bit-stealing)
-var meta uint64 
-const lockBit = 1 << 63
-// Acquires lock using ONLY the highest bit
-synx.BitLockUint64(&meta, lockBit) 
-// ... critical section ...
-// meta's lower 63 bits are still usable for data!
-synx.BitUnlockUint64(&meta, lockBit)
+// Phaser: Dynamic barrier (Java-style)
+p := synx.NewPhaser()
+p.Register()
+phase := p.ArriveAndAwaitAdvance()
+
+// Barter: Two-party value exchange
+b := synx.NewBarter[string]()
+// G1: v := b.Exchange("hello") -> receives "world"
+// G2: v := b.Exchange("world") -> receives "hello"
 ```

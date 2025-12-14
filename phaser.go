@@ -44,10 +44,9 @@ func NewPhaser() *Phaser {
 // Returns the current phase number.
 func (p *Phaser) Register() int {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.state.Add(1 << 16) // Increment parties
 	phase := int(p.state.Load() >> 32)
+	p.mu.Unlock()
 	return phase
 }
 
@@ -56,7 +55,6 @@ func (p *Phaser) Register() int {
 // It does NOT wait for others.
 func (p *Phaser) Arrive() int {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	s := p.state.Load()
 	phase := int(s >> 32)
@@ -79,12 +77,13 @@ func (p *Phaser) Arrive() int {
 		// Assuming we started both at 0.
 
 		p.epoch.Add(1)
-
+		p.mu.Unlock()
 		return phase + 1
 	}
 
 	// Update arrived count
 	p.state.Store(uint64(phase)<<32 | uint64(parties)<<16 | uint64(arrived))
+	p.mu.Unlock()
 	return phase
 }
 
@@ -133,7 +132,6 @@ func (p *Phaser) ArriveAndAwaitAdvance() int {
 // ArriveAndDeregister signals arrival and removes the party.
 func (p *Phaser) ArriveAndDeregister() int {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	s := p.state.Load()
 	phase := int(s >> 32)
@@ -148,6 +146,7 @@ func (p *Phaser) ArriveAndDeregister() int {
 		// Advancing ensures consistency if someone was waiting (though they shouldn't be if we are the last).
 		p.state.Store(uint64(phase+1) << 32) // parties=0, arrived=0
 		p.epoch.Add(1)
+		p.mu.Unlock()
 		return phase + 1
 	}
 
@@ -155,10 +154,12 @@ func (p *Phaser) ArriveAndDeregister() int {
 		// We were the last one needed.
 		p.state.Store(uint64(phase+1)<<32 | uint64(parties)<<16)
 		p.epoch.Add(1)
+		p.mu.Unlock()
 		return phase + 1
 	}
 
 	// Just update parties
 	p.state.Store(uint64(phase)<<32 | uint64(parties)<<16 | uint64(arrived))
+	p.mu.Unlock()
 	return phase
 }

@@ -34,17 +34,12 @@ type epochWaiter struct {
 	next *epochWaiter
 }
 
+// Current returns the current epoch value.
 func (e *Epoch) Current() uint32 {
-	// The state variable still holds the current sequence number in the high 32 bits?
-	// Wait, the original implementation packed state (quota) and waiters in uint64.
-	// We are changing the implementation to use an explicit list.
-	// So `state` can just be the counter itself now?
-	// Or we keep atomic state for fast path reads.
-	// Let's just use `state` as the counter value (uint64 to avoid align issues, or just uint32).
-	// But `atomic.Uint64` is used. Let's stick to using it as just the counter.
 	return uint32(e.state.Load())
 }
 
+// Add advances the epoch by delta and wakes waiters whose targets are met.
 func (e *Epoch) Add(delta uint32) uint32 {
 	if delta == 0 {
 		return e.Current()
@@ -61,7 +56,6 @@ func (e *Epoch) Add(delta uint32) uint32 {
 	// Note: We could keep a separate atomic "waiter count" to skip lock if 0.
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	// Walk the list of waiters
 	// We have a singly linked list.
@@ -94,9 +88,11 @@ func (e *Epoch) Add(delta uint32) uint32 {
 		}
 	}
 
+	e.mu.Unlock()
 	return newVal
 }
 
+// WaitAtLeast blocks until the epoch reaches at least the target value.
 func (e *Epoch) WaitAtLeast(target uint32) {
 	// 1. Fast path: check if condition already met
 	if uint32(e.state.Load()) >= target {

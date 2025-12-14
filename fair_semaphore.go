@@ -25,10 +25,12 @@ type fairWaiter struct {
 	sema uint32
 }
 
+// NewFairSemaphore creates a FairSemaphore with the given number of permits.
 func NewFairSemaphore(permits int64) *FairSemaphore {
 	return &FairSemaphore{permits: permits}
 }
 
+// Acquire blocks until n permits are available, then takes them.
 func (s *FairSemaphore) Acquire(n int64) {
 	if n <= 0 {
 		return
@@ -51,19 +53,22 @@ func (s *FairSemaphore) Acquire(n int64) {
 	runtime_semacquire(&w.sema)
 }
 
+// TryAcquire attempts to acquire n permits without blocking.
 func (s *FairSemaphore) TryAcquire(n int64) bool {
 	if n <= 0 {
 		return true
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.head != nil || s.permits < n {
+		s.mu.Unlock()
 		return false
 	}
 	s.permits -= n
+	s.mu.Unlock()
 	return true
 }
 
+// Release returns n permits and wakes waiting goroutines.
 func (s *FairSemaphore) Release(n int64) {
 	if n <= 0 {
 		return
