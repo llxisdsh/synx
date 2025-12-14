@@ -43,13 +43,13 @@ func TestEpoch_MultipleWaiters(t *testing.T) {
 	if e.Current() != 0 {
 		t.Fatalf("unexpected current before increments: %d", e.Current())
 	}
-	e.Increment()
-	e.Increment()
+	e.Add(1)
+	e.Add(1)
 	time.Sleep(10 * time.Millisecond)
 	if e.Current() != 2 {
 		t.Fatalf("current = %d, want 2", e.Current())
 	}
-	e.Increment()
+	e.Add(1)
 	wg.Wait()
 	if e.Current() != 3 {
 		t.Fatalf("current = %d, want 3", e.Current())

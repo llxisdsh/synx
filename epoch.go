@@ -97,10 +97,6 @@ func (e *Epoch) Add(delta uint32) uint32 {
 	return newVal
 }
 
-func (e *Epoch) Increment() uint32 {
-	return e.Add(1)
-}
-
 func (e *Epoch) WaitAtLeast(target uint32) {
 	// 1. Fast path: check if condition already met
 	if uint32(e.state.Load()) >= target {
