@@ -110,7 +110,7 @@ func (e *Gate) Pulse() {
 
 		// Next state: OpenBit=0, Gen=Gen+1, Count=0
 		nextGen := (gen + 1) & 0x7FFFFFFF
-		next := uint64(nextGen) << 32
+		next := nextGen << 32
 
 		if e.state.CompareAndSwap(s, next) {
 			if cnt > 0 {

@@ -32,15 +32,18 @@ func (rw *RWLock) Lock() {
 	for {
 		// Optimistic check: is it completely free?
 		s := rw.state.Load()
-		if s == 0 {
-			if rw.state.CompareAndSwap(0, rwWriteMask) {
-				return
-			}
-		} else if s&rwWriteMask != 0 {
-			// Writer holding it, spin.
-		} else {
-			// Readers holding it. Spin.
+		if s == 0 && rw.state.CompareAndSwap(0, rwWriteMask) {
+			return
 		}
+		// if s == 0 {
+		// 	if rw.state.CompareAndSwap(0, rwWriteMask) {
+		// 		return
+		// 	}
+		// } else if s&rwWriteMask != 0 {
+		// 	// Writer holding it, spin.
+		// } else {
+		// 	// Readers holding it. Spin.
+		// }
 		delay(&spins)
 	}
 }
