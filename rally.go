@@ -2,6 +2,8 @@ package synx
 
 import (
 	"sync/atomic"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // Rally is a reusable synchronization primitive that allows a set of
@@ -24,7 +26,7 @@ type Rally struct {
 	// sema is a double-buffered semaphore to prevent "signal stealing"
 	// between generations.
 	// Generation N waits on sema[N%2].
-	sema [2]uint32
+	sema [2]opt.Sema
 }
 
 // Meet waits until 'parties' number of callers have called Meet on this barrier.
@@ -60,14 +62,14 @@ func (b *Rally) Meet(parties int) int {
 				// They are waiting on sema[gen%2].
 				semaPtr := &b.sema[gen%2]
 				for i := 0; i < int(count); i++ {
-					runtime_semrelease(semaPtr, false, 0)
+					semaPtr.Release()
 				}
 				return int(count)
 			}
 		} else if b.state.CompareAndSwap(s, s+1) {
 			// We are not the last. Increment waiter count.
 			// Block on the semaphore for THIS generation.
-			runtime_semacquire(&b.sema[gen%2])
+			b.sema[gen%2].Acquire()
 			return int(count)
 		}
 	}

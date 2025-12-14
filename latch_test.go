@@ -5,15 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unsafe"
 )
-
-func TestLatchSize(t *testing.T) {
-	var e Latch
-	if size := unsafe.Sizeof(e); size != 8 {
-		t.Errorf("Latch size = %d, want 8", size)
-	}
-}
 
 func TestLatchBasic(t *testing.T) {
 	var e Latch

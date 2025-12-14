@@ -2,6 +2,8 @@ package synx
 
 import (
 	"sync/atomic"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // Gate is a synchronization primitive that can be manually opened and closed,
@@ -26,7 +28,7 @@ type Gate struct {
 
 	// sema is a double-buffered semaphore to prevent signal stealing
 	// during rapid Open/Close cycles.
-	sema [2]uint32
+	sema [2]opt.Sema
 }
 
 const (
@@ -57,7 +59,7 @@ func (e *Gate) Open() {
 			if cnt > 0 {
 				semaPtr := &e.sema[gen%2]
 				for i := 0; i < int(cnt); i++ {
-					runtime_semrelease(semaPtr, false, 0)
+					semaPtr.Release()
 				}
 			}
 			return
@@ -117,7 +119,7 @@ func (e *Gate) Pulse() {
 				// Wake up waters from the OLD generation.
 				semaPtr := &e.sema[gen%2]
 				for i := 0; i < int(cnt); i++ {
-					runtime_semrelease(semaPtr, false, 0)
+					semaPtr.Release()
 				}
 			}
 			return
@@ -139,7 +141,7 @@ func (e *Gate) Wait() {
 		// Not Open. Add to waiter count.
 		if e.state.CompareAndSwap(s, s+1) {
 			gen := (s >> 32) & 0x7FFFFFFF
-			runtime_semacquire(&e.sema[gen%2])
+			e.sema[gen%2].Acquire()
 			// Upon wakeup, we loop again to double-check state or
 			// mostly just return because we were woken by Open().
 			// But since Open() leaves it Open, returning is correct.

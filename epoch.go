@@ -2,6 +2,8 @@ package synx
 
 import (
 	"sync/atomic"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // Epoch represents a monotonically increasing counter that supports "wait for target" semantics.
@@ -29,7 +31,7 @@ type Epoch struct {
 
 type epochWaiter struct {
 	target uint32
-	sema   uint32
+	sema   opt.Sema
 	// next is protected by Epoch.mu
 	next *epochWaiter
 }
@@ -67,7 +69,7 @@ func (e *Epoch) Add(delta uint32) uint32 {
 	for curr != nil {
 		if curr.target <= newVal {
 			// Wake this waiter
-			runtime_semrelease(&curr.sema, false, 0)
+			curr.sema.Release()
 
 			// Remove from list
 			if prev == nil {
@@ -118,5 +120,5 @@ func (e *Epoch) WaitAtLeast(target uint32) {
 	e.mu.Unlock()
 
 	// 3. Sleep
-	runtime_semacquire(&w.sema)
+	w.sema.Acquire()
 }

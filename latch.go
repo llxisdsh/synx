@@ -2,6 +2,8 @@ package synx
 
 import (
 	"sync/atomic"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
 // Latch is a synchronization primitive for "wait for completion" (One-Way Door).
@@ -14,7 +16,7 @@ type Latch struct {
 	//   bit 0: done flag (1 = done)
 	//   bits 1-31: waiter count
 	state atomic.Uint32
-	sema  uint32
+	sema  opt.Sema
 }
 
 const (
@@ -35,7 +37,7 @@ func (e *Latch) Open() {
 		if e.state.CompareAndSwap(s, s|latchDoneFlag) {
 			waiters := s >> 1
 			for range waiters {
-				runtime_semrelease(&e.sema, false, 0)
+				e.sema.Release()
 			}
 			return
 		}
@@ -52,7 +54,7 @@ func (e *Latch) Wait() {
 		}
 
 		if e.state.CompareAndSwap(s, s+latchOneWaiter) {
-			runtime_semacquire(&e.sema)
+			e.sema.Acquire()
 			return
 		}
 	}

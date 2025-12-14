@@ -1,5 +1,7 @@
 package synx
 
+import "github.com/llxisdsh/synx/internal/opt"
+
 // FairSemaphore is a counting semaphore that guarantees FIFO (First-In-First-Out) order.
 //
 // Standard Semaphores (like golang.org/x/sync/semaphore) generally optimize for throughput
@@ -22,7 +24,7 @@ type FairSemaphore struct {
 type fairWaiter struct {
 	next *fairWaiter
 	n    int64
-	sema uint32
+	sema opt.Sema
 }
 
 // NewFairSemaphore creates a FairSemaphore with the given number of permits.
@@ -50,7 +52,7 @@ func (s *FairSemaphore) Acquire(n int64) {
 		s.tail = w
 	}
 	s.mu.Unlock()
-	runtime_semacquire(&w.sema)
+	w.sema.Acquire()
 }
 
 // TryAcquire attempts to acquire n permits without blocking.
@@ -82,7 +84,7 @@ func (s *FairSemaphore) Release(n int64) {
 		if s.head == nil {
 			s.tail = nil
 		}
-		runtime_semrelease(&w.sema, false, 0)
+		w.sema.Release()
 	}
 	s.mu.Unlock()
 }
