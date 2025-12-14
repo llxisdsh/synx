@@ -4,13 +4,16 @@ import (
 	"sync/atomic"
 )
 
-// Gate is a synchronization primitive that can be manually opened and closed.
+// Gate is a synchronization primitive that can be manually opened and closed,
+// and supports a "pulse" operation to wake up current waiters without keeping the gate open.
 //
-// State:
-//   - Open: Wait returns immediately.
-//   - Close: Wait blocks.
+// It conceptually models a physical gate:
+//   - Open: The gate is open. Waiters pass immediately.
+//   - Close: The gate is closed. Waiters block until Open or Pulse.
+//   - Pulse: The gate remains closed, but all currently blocked waiters are allowed to pass.
+//     Future waiters will block.
 //
-// It is zero-value usable (starts Close).
+// It is zero-value usable (starts Closed).
 //
 // Size: 16 bytes (8 byte state + 2*4 byte sema).
 type Gate struct {
@@ -83,6 +86,40 @@ func (e *Gate) Close() {
 		next := nextGen << 32
 
 		if e.state.CompareAndSwap(s, next) {
+			return
+		}
+	}
+}
+
+// Pulse performs a "single cycle" broadcast.
+// It wakes up all currently waiting goroutines, but ensures the gate remains (or becomes) Closed
+// for any subsequent callers.
+//
+// This is useful for broadcasting a signal (like a condition variable Broadcast)
+// without permanently changing the state to Open.
+func (e *Gate) Pulse() {
+	for {
+		s := e.state.Load()
+
+		// Pulse implies the gate is Closed for *future* waiters.
+		// If it was Open, we transition to Closed.
+		// If it was Closed, we stay Closed (but advance generation).
+
+		gen := (s >> 32) & 0x7FFFFFFF
+		cnt := s & gateCntMsk
+
+		// Next state: OpenBit=0, Gen=Gen+1, Count=0
+		nextGen := (gen + 1) & 0x7FFFFFFF
+		next := uint64(nextGen) << 32
+
+		if e.state.CompareAndSwap(s, next) {
+			if cnt > 0 {
+				// Wake up waters from the OLD generation.
+				semaPtr := &e.sema[gen%2]
+				for i := 0; i < int(cnt); i++ {
+					runtime_semrelease(semaPtr, false, 0)
+				}
+			}
 			return
 		}
 	}

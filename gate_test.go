@@ -51,6 +51,62 @@ func TestGate_Simple(t *testing.T) {
 	}
 }
 
+func TestGate_Pulse(t *testing.T) {
+	var g Gate
+	var wg sync.WaitGroup
+
+	// Start waiters
+	const n = 10
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			g.Wait()
+		}()
+	}
+
+	// Ensure they are waiting (best effort)
+	time.Sleep(10 * time.Millisecond)
+
+	// Pulse should wake them all
+	g.Pulse()
+
+	// Wait for them to finish
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("waiters did not wake up after Pulse")
+	}
+
+	// Gate should be closed for new waiters
+	if g.IsOpen() {
+		t.Fatalf("gate should be closed after Pulse")
+	}
+
+	// New waiter should block
+	blockCh := make(chan struct{})
+	go func() {
+		g.Wait()
+		close(blockCh)
+	}()
+
+	select {
+	case <-blockCh:
+		t.Fatalf("new waiter should block after Pulse")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Open to clean up
+	g.Open()
+	<-blockCh
+}
+
 func TestGate_Open(t *testing.T) {
 	var e Gate
 	var wg sync.WaitGroup
