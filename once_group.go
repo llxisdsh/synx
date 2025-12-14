@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
-	"sync"
 	"sync/atomic"
 )
 
@@ -19,7 +18,7 @@ type OnceGroupResult[V any] struct {
 
 // call represents an in-flight or completed OnceGroup.Do call
 type call[V any] struct {
-	wg        sync.WaitGroup
+	latch     Latch
 	val       V
 	err       error
 	dups      int32
@@ -43,7 +42,6 @@ func (g *OnceGroup[K, V]) Do(
 	fn func() (V, error),
 ) (V, error, bool) {
 	primary := &call[V]{}
-	primary.wg.Add(1)
 	c, loaded := g.m.LoadOrStore(key, primary)
 	if loaded {
 		// mark duplication under lock to ensure shared=true visibility
@@ -53,7 +51,7 @@ func (g *OnceGroup[K, V]) Do(
 			}
 		})
 
-		c.wg.Wait()
+		c.latch.Wait()
 		var e *panicError
 		if errors.As(c.err, &e) {
 			panic(e)
@@ -84,7 +82,6 @@ func (g *OnceGroup[K, V]) DoChan(
 			ch,
 		),
 	}
-	c0.wg.Add(1)
 	c, loaded := g.m.LoadOrStore(key, c0)
 	if loaded {
 		// Duplicates: if already completed, send immediately; otherwise wait on wg and send
@@ -100,7 +97,7 @@ func (g *OnceGroup[K, V]) DoChan(
 			}
 		})
 		go func(c *call[V], ch chan<- OnceGroupResult[V]) {
-			c.wg.Wait()
+			c.latch.Wait()
 			var e *panicError
 			switch {
 			case errors.As(c.err, &e):
@@ -158,7 +155,7 @@ func (g *OnceGroup[K, V]) doCall(
 		}
 
 		// Complete the call and remove the key atomically.
-		c.wg.Done()
+		c.latch.Open()
 		atomic.StoreInt32(&c.completed, 1)
 
 		var chs []chan<- OnceGroupResult[V]
