@@ -1,5 +1,3 @@
-//go:build !race
-
 package synx
 
 import (
@@ -29,10 +27,10 @@ import (
 //   - Buckets are packed without padding for cache-friendly layout.
 type FlatMap[K comparable, V any] struct {
 	_        noCopy
-	table    seqlockSlot[flatTable[K, V]]
+	table    SeqLockSlot[flatTable[K, V]]
 	seed     uintptr
 	keyHash  HashFunc
-	tableSeq seqlock32 // seqlock of table
+	tableSeq SeqLock32 // seqlock of table
 	shrinkOn bool      // WithAutoShrink
 	intKey   bool
 	rs       flatRebuildState[K, V]
@@ -41,8 +39,8 @@ type FlatMap[K comparable, V any] struct {
 type flatRebuildState[K comparable, V any] struct {
 	hint        atomic.Uint32
 	chunks      int32
-	newTable    seqlockSlot[flatTable[K, V]]
-	newTableSeq seqlock32 // seqlock of new table
+	newTable    SeqLockSlot[flatTable[K, V]]
+	newTableSeq SeqLock32 // seqlock of new table
 	process     int32     // atomic
 	completed   int32     // atomic
 	gate        Gate
@@ -58,9 +56,9 @@ type flatTable[K comparable, V any] struct {
 type flatBucket[K comparable, V any] struct {
 	_       [0]atomic.Uint64
 	meta    uint64         // op byte + h2 bytes
-	seq     seqlock        // seqlock of bucket
+	seq     SeqLock        // seqlock of bucket
 	next    unsafe.Pointer // *flatBucket[K,V]
-	entries [entriesPerBucket]seqlockSlot[entry_[K, V]]
+	entries [entriesPerBucket]SeqLockSlot[entry_[K, V]]
 }
 
 // NewFlatMap creates a new seqlock-based flat hash map.
@@ -115,7 +113,7 @@ func (m *FlatMap[K, V]) init(
 	m.seed = uintptr(rand.Uint64())
 	m.shrinkOn = cfg.autoShrink
 	tableLen := calcTableLen(cfg.capacity)
-	seqWriteLocked32(&m.tableSeq, &m.table,
+	SeqLockWriteLocked32(&m.tableSeq, &m.table,
 		newFlatTable[K, V](tableLen, runtime.GOMAXPROCS(0)))
 	m.rs.gate.Open()
 }
@@ -128,7 +126,7 @@ func (m *FlatMap[K, V]) slowInit() {
 		return
 	}
 	// The table may have been altered prior to our changes.
-	table := seqRead32(&m.tableSeq, &m.table)
+	table := SeqLockRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr != nil {
 		m.endRebuild(rs)
 		return
@@ -146,7 +144,7 @@ func (m *FlatMap[K, V]) slowInit() {
 //     instability.
 //   - Provides stable latency under high concurrency.
 func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
-	table := seqRead32(&m.tableSeq, &m.table)
+	table := SeqLockRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return *new(V), false
 	}
@@ -163,20 +161,50 @@ func (m *FlatMap[K, V]) Load(key K) (value V, ok bool) {
 			delay(&spins)
 			goto retry
 		}
-		meta := b.meta
-		for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
-			j := firstMarkedByteIndex(marked)
-			e := b.At(j).ReadUnfenced()
+		meta := loadUint64Fast(&b.meta)
+		//goland:noinspection GoBoolExpressions
+		if !opt.Race_ {
+			for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
+				j := firstMarkedByteIndex(marked)
+				e := b.At(j).ReadUnfenced()
+				if !b.seq.EndRead(s1) {
+					goto retry
+				}
+				if opt.EmbeddedHash_ {
+					if e.GetHash() == hash && e.Key == key {
+						return e.Value, true
+					}
+				} else {
+					if e.Key == key {
+						return e.Value, true
+					}
+				}
+			}
+		} else {
+			// -race:
+			// To use a Buffer & Scan approach for strict locking compatibility.
+			// This prevents Double-Free / Use-After-Free bugs in strict mode
+			// that occurred with the previous iterative loop.
+			var cache [entriesPerBucket]entry_[K, V]
+			var cacheCount int
+			for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
+				j := firstMarkedByteIndex(marked)
+				cache[cacheCount] = b.At(j).ReadUnfenced()
+				cacheCount++
+			}
 			if !b.seq.EndRead(s1) {
 				goto retry
 			}
-			if opt.EmbeddedHash_ {
-				if e.GetHash() == hash && e.Key == key {
-					return e.Value, true
-				}
-			} else {
-				if e.Key == key {
-					return e.Value, true
+			for i := range cacheCount {
+				e := &cache[i]
+				if opt.EmbeddedHash_ {
+					if e.GetHash() == hash && e.Key == key {
+						return e.Value, true
+					}
+				} else {
+					if e.Key == key {
+						return e.Value, true
+					}
 				}
 			}
 		}
@@ -314,7 +342,7 @@ func (m *FlatMap[K, V]) Compute(
 	fn func(e *Entry[K, V]),
 ) (actual V, loaded bool) {
 	for {
-		table := seqRead32(&m.tableSeq, &m.table)
+		table := SeqLockRead32(&m.tableSeq, &m.table)
 		if table.buckets.ptr == nil {
 			m.slowInit()
 			continue
@@ -331,7 +359,7 @@ func (m *FlatMap[K, V]) Compute(
 		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
 			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if m.rs.newTableSeq.WriteCompleted() {
+				if m.rs.newTableSeq.CanRead() {
 					root.Unlock()
 					m.helpCopyAndWait(&m.rs)
 					continue
@@ -344,7 +372,7 @@ func (m *FlatMap[K, V]) Compute(
 				// mapRebuildWithWritersHint: allow concurrent writers
 			}
 		}
-		if seqRead32(&m.tableSeq, &m.table).buckets.ptr != table.buckets.ptr {
+		if SeqLockRead32(&m.tableSeq, &m.table).buckets.ptr != table.buckets.ptr {
 			root.Unlock()
 			continue
 		}
@@ -365,7 +393,7 @@ func (m *FlatMap[K, V]) Compute(
 
 	findLoop:
 		for b := root; b != nil; b = (*flatBucket[K, V])(b.next) {
-			meta := b.meta
+			meta := loadUint64Fast(&b.meta)
 			for marked := markZeroBytes(meta ^ h2w); marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
 				e := b.At(j).Ptr()
@@ -418,7 +446,7 @@ func (m *FlatMap[K, V]) Compute(
 			// append new bucket
 			storePtr(&lastB.next, unsafe.Pointer(&flatBucket[K, V]{
 				meta: setByte(emptyMeta, h2v, 0),
-				entries: [entriesPerBucket]seqlockSlot[entry_[K, V]]{
+				entries: [entriesPerBucket]SeqLockSlot[entry_[K, V]]{
 					{buf: it.entry},
 				},
 			}))
@@ -476,7 +504,7 @@ func (m *FlatMap[K, V]) Compute(
 //   - Yields outside of locks to minimize contention.
 //   - Returning false from the callback stops iteration early.
 func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
-	table := seqRead32(&m.tableSeq, &m.table)
+	table := SeqLockRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return
 	}
@@ -494,7 +522,7 @@ func (m *FlatMap[K, V]) Range(yield func(K, V) bool) {
 				delay(&spins)
 				goto retry
 			}
-			meta = b.meta
+			meta = loadUint64Fast(&b.meta)
 			cacheCount = 0
 			for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 				j := firstMarkedByteIndex(marked)
@@ -553,7 +581,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 	}
 
 	m.rebuild(hint, func() {
-		table := seqRead32(&m.tableSeq, &m.table)
+		table := SeqLockRead32(&m.tableSeq, &m.table)
 		if table.buckets.ptr == nil {
 			return
 		}
@@ -564,7 +592,7 @@ func (m *FlatMap[K, V]) ComputeRange(
 			root := table.buckets.At(i)
 			root.Lock()
 			for b := root; b != nil; b = (*flatBucket[K, V])(b.next) {
-				meta := b.meta
+				meta := loadUint64Fast(&b.meta)
 				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 					j := firstMarkedByteIndex(marked)
 					e := b.At(j)
@@ -612,7 +640,7 @@ func (m *FlatMap[K, V]) Entries(
 // This operation sums counters across all size stripes for an approximate
 // count.
 func (m *FlatMap[K, V]) Size() int {
-	table := seqRead32(&m.tableSeq, &m.table)
+	table := SeqLockRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return 0
 	}
@@ -622,13 +650,13 @@ func (m *FlatMap[K, V]) Size() int {
 
 // Clear clears all key-value pairs from the map.
 func (m *FlatMap[K, V]) Clear() {
-	table := seqRead32(&m.tableSeq, &m.table)
+	table := SeqLockRead32(&m.tableSeq, &m.table)
 	if table.buckets.ptr == nil {
 		return
 	}
 
 	m.rebuild(mapRebuildBlockWritersHint, func() {
-		seqWriteLocked32(&m.tableSeq, &m.table,
+		SeqLockWriteLocked32(&m.tableSeq, &m.table,
 			newFlatTable[K, V](minTableLen, runtime.GOMAXPROCS(0)))
 	})
 }
@@ -659,8 +687,8 @@ func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, 
 	rs.chunks = 0
 	rs.process = 0
 	rs.completed = 0
-	rs.newTable = seqlockSlot[flatTable[K, V]]{}
-	rs.newTableSeq = seqlock32{}
+	rs.newTable = SeqLockSlot[flatTable[K, V]]{}
+	rs.newTableSeq.ClearLocked()
 	rs.gate.Close()
 	return rs, true
 }
@@ -682,7 +710,7 @@ func (m *FlatMap[K, V]) rebuild(
 		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
 			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if m.rs.newTableSeq.WriteCompleted() {
+				if m.rs.newTableSeq.CanRead() {
 					m.helpCopyAndWait(&m.rs)
 				} else {
 					runtime.Gosched()
@@ -755,15 +783,15 @@ func (m *FlatMap[K, V]) finalizeResize(
 	overCpus := cpus * resizeOverPartition
 	chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
 	rs.chunks = int32(chunks)
-	seqWriteLocked32(&rs.newTableSeq, &rs.newTable,
+	SeqLockWriteLocked32(&rs.newTableSeq, &rs.newTable,
 		newFlatTable[K, V](newLen, cpus)) // Release rs
 	m.helpCopyAndWait(rs)
 }
 
 //go:noinline
 func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
-	table := seqRead32(&m.tableSeq, &m.table)
-	newTable := seqRead32(&rs.newTableSeq, &rs.newTable) // Acquire rs
+	table := SeqLockRead32(&m.tableSeq, &m.table)
+	newTable := SeqLockRead32(&rs.newTableSeq, &rs.newTable) // Acquire rs
 	if newTable.buckets.ptr == nil ||
 		newTable.buckets.ptr == table.buckets.ptr {
 		rs.gate.Wait()
@@ -793,7 +821,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 		end := min(start+chunkSz, baseLen)
 		m.copyBucket(&table, start, end, oldLen, baseLen, &newTable)
 		if atomic.AddInt32(&rs.completed, 1) == chunks {
-			seqWriteLocked32(&m.tableSeq, &m.table, newTable)
+			SeqLockWriteLocked32(&m.tableSeq, &m.table, newTable)
 			m.endRebuild(rs)
 			return
 		}
@@ -818,7 +846,7 @@ func (m *FlatMap[K, V]) copyBucket(
 			srcB := table.buckets.At(srcIdx)
 			srcB.Lock()
 			for b := srcB; b != nil; b = (*flatBucket[K, V])(b.next) {
-				meta := b.meta
+				meta := loadUint64Fast(&b.meta)
 				for marked := meta & metaMask; marked != 0; marked &= marked - 1 {
 					j := firstMarkedByteIndex(marked)
 					e := b.At(j).Ptr()
@@ -833,11 +861,11 @@ func (m *FlatMap[K, V]) copyBucket(
 					// Append entry to the destination bucket
 					h2v := h2(hash)
 					for {
-						meta := destB.meta
+						meta := loadUint64Fast(&destB.meta)
 						empty := (^meta) & metaMask
 						if empty != 0 {
 							emptyIdx := firstMarkedByteIndex(empty)
-							destB.meta = setByte(meta, h2v, emptyIdx)
+							storeUint64Fast(&destB.meta, setByte(meta, h2v, emptyIdx))
 							*destB.At(emptyIdx).Ptr() = *e
 							break
 						}
@@ -845,7 +873,7 @@ func (m *FlatMap[K, V]) copyBucket(
 						if next == nil {
 							destB.next = unsafe.Pointer(&flatBucket[K, V]{
 								meta: setByte(metaEmpty, h2v, 0),
-								entries: [entriesPerBucket]seqlockSlot[entry_[K, V]]{
+								entries: [entriesPerBucket]SeqLockSlot[entry_[K, V]]{
 									{buf: *e},
 								},
 							})
@@ -891,10 +919,10 @@ func (t *flatTable[K, V]) SumSize() int {
 }
 
 //go:nosplit
-func (b *flatBucket[K, V]) At(i int) *seqlockSlot[entry_[K, V]] {
-	return (*seqlockSlot[entry_[K, V]])(unsafe.Add(
+func (b *flatBucket[K, V]) At(i int) *SeqLockSlot[entry_[K, V]] {
+	return (*SeqLockSlot[entry_[K, V]])(unsafe.Add(
 		unsafe.Pointer(&b.entries),
-		uintptr(i)*unsafe.Sizeof(seqlockSlot[entry_[K, V]]{}),
+		uintptr(i)*unsafe.Sizeof(SeqLockSlot[entry_[K, V]]{}),
 	))
 }
 

@@ -40,15 +40,16 @@ Atomic, low-overhead coordination tools built on runtime semaphores.
 | **`Latch`** | **One-time Door** | Starts closed. Once `Open()`, stays open forever. | Initialization, Shutdown signal. |
 | **`Gate`** | **Manual Door** | `Open()`/`Close()`/`Pulse()`. Supports broadcast wakeups. | Pausing/Resuming, Cond-like signals. |
 | **`Rally`** | **Meeting Point** | `Meet(n)` waits until n parties arrive, then releases all. | CyclicBarrier, MapReduce stages. |
-| **`FairSemaphore`**| **FIFO Queue** | Strict FIFO ordering for permit acquisition. | Anti-starvation scenarios. |
-| **`Epoch`** | **Milestone** | `WaitAtLeast(n)` blocks until counter reaches n. No thundering herd. | Phase coordination, Version gates. |
 | **`Phaser`** | **Dynamic Barrier** | Dynamic party registration with split-phase `Arrive()`/`AwaitAdvance()`. | Java-style Phaser, Pipeline stages. |
-| **`BitLock`** | **Bit Lock** | Spins on a specific bit mask. | Fine-grained, memory-constrained locks. |
+| **`Epoch`** | **Milestone** | `WaitAtLeast(n)` blocks until counter reaches n. No thundering herd. | Phase coordination, Version gates. |
+| **`Barter`** | **Exchanger** | Two goroutines swap values at a sync point. | Producer-Consumer handoff. |
+| **`RWLock`** | **Read-Write Lock** | Spin-based R/W lock, writer-preferred. | Low-latency, writer-priority. |
 | **`TicketLock`** | **Ticket Queue** | FIFO spin-lock with ticket algorithm. | Fair mutex, Latency-sensitive paths. |
-| **`RWLock`** | **Read-Write Lock** | Spin-based R/W lock, writer-preferred. | Read-heavy, low-latency access. |
+| **`BitLock`** | **Bit Lock** | Spins on a specific bit mask. | Fine-grained, memory-constrained locks. |
+| **`SeqLock`** | **Sequence Lock** | Optimistic reads with version counting. | Tear-free snapshots, Read-heavy. |
+| **`FairSemaphore`**| **FIFO Queue** | Strict FIFO ordering for permit acquisition. | Anti-starvation scenarios. |
 | **`TicketLockGroup`** | **Keyed Lock** | Per-key locking with auto-cleanup. | User/Resource isolation. |
 | **`RWLockGroup`** | **Keyed R/W Lock** | Per-key R/W locking with auto-cleanup. | Config/Data partitioning. |
-| **`Barter`** | **Exchanger** | Two goroutines swap values at a sync point. | Producer-Consumer handoff. |
 
 > **Design Philosophy**: Minimal footprint, direct `runtime_semacquire` integration. Most primitives are zero-alloc on hot paths.
 
@@ -69,6 +70,18 @@ func main() {
     // 2. FlatMap (Seqlock-based, inline storage)
     fm := synx.NewFlatMap[string, int](synx.WithCapacity(1000))
     fm.Store("bar", 2)
+
+    // 3. Compute (Atomic Read-Modify-Write)
+    // Safe, lock-free coordination for complex state changes
+    m.Compute("foo", func(e *synx.Entry[string, int]) {
+        if e.Loaded() {
+            // Atomically increment if exists
+            e.Update(e.Value() + 1)
+        } else {
+            // Initialize if missing
+            e.Update(1)
+        }
+    })
 }
 ```
 
@@ -84,34 +97,75 @@ val, err, shared := g.Do("key", func() (string, error) {
 
 ### Primitives Gallery
 
+#### 1. Coordination
+
 ```go
-// Latch: One-shot signal
+// Latch: One-shot signal (e.g., init finished)
 var l synx.Latch
 go func() { l.Open() }()
-l.Wait()
+l.Wait() // Blocks until Open()
 
-// Gate: Reusable open/close + broadcast
+// Gate: Reusable stop/go barrier
 var g synx.Gate
 g.Open()   // All waiters pass
 g.Close()  // Future waiters block
-g.Pulse()  // Wake current waiters only (stays closed)
+g.Pulse()  // Wake current waiters only, remain closed
 
-// Rally: Cyclic barrier
+// Rally: Cyclic barrier for N parties
 var r synx.Rally
-r.Meet(3)  // Blocks until 3 parties arrive
+r.Meet(3)  // Blocks until 3 goroutines arrive
+```
 
-// Epoch: Milestone waiter
-var e synx.Epoch
-go func() { e.Add(5) }()
-e.WaitAtLeast(5)  // No thundering herd
+#### 2. Advanced Locking
 
+```go
+// RWLock: Writer-preferred R/W lock (avoids writer starvation)
+var rw synx.RWLock
+rw.Lock() // Higher priority than RLock
+
+// TicketLock: Fair mutex (FIFO), no starvation
+var mu synx.TicketLock
+mu.Lock()
+defer mu.Unlock()
+
+// BitLock: Memory-efficient lock using a single bit in uint64
+var state uint64
+const lockBit = 1 << 63
+synx.BitLockUint64(&state, lockBit) // Spins until bit 63 is 0, then sets it
+synx.BitUnlockUint64(&state, lockBit)
+
+// SeqLock: Tear-free snapshots for read-heavy small data
+var sl synx.SeqLock
+var slot synx.SeqLockSlot[string]
+synx.SeqLockWrite(&sl, &slot, "data") // Writer
+val := synx.SeqLockRead(&sl, &slot)   // Reader (optimistic, no blocking)
+```
+
+#### 3. Keyed Locks (Auto-cleanup)
+
+```go
+// Lock by key (string, int, etc.) without memory leaks
+var locks synx.TicketLockGroup[string]
+
+locks.Lock("user:123")
+// Critical section for user:123
+locks.Unlock("user:123")
+```
+
+#### 4. Specialized
+
+```go
 // Phaser: Dynamic barrier (Java-style)
 p := synx.NewPhaser()
 p.Register()
 phase := p.ArriveAndAwaitAdvance()
 
-// Barter: Two-party value exchange
+// Epoch: Wait for counter to reach target (e.g., version waits)
+var e synx.Epoch
+e.WaitAtLeast(5) // Blocks until e.Add() reaches 5
+
+// Barter: Exchanger for 2 goroutines
 b := synx.NewBarter[string]()
-// G1: v := b.Exchange("hello") -> receives "world"
-// G2: v := b.Exchange("world") -> receives "hello"
+// G1: b.Exchange("ping") -> returns "pong"
+// G2: b.Exchange("pong") -> returns "ping"
 ```

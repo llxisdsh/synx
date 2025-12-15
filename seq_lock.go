@@ -3,157 +3,208 @@ package synx
 import (
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/llxisdsh/synx/internal/opt"
 )
 
-// seqlock coordinates tear-free publication for a single slot.
+// SeqLock implements a sequence lock (seqlock) for tear-free reads of a single slot.
 //
-// Role:
-//   - Sequence guard only: holds odd/even counter, no payload.
-//   - Stable-window reads: readers copy from seqlockSlot[T] when seq is
-//     even and unchanged.
-//   - Non-blocking publishes: writers CAS to odd, copy, then publish by
-//     storing seq+2 (even).
-//
-// Differences:
-//   - vs atomic.Pointer[T]: avoids heap indirection; improves locality.
-//   - vs atomic.Value: typed publication without boxing; supports
-//     multi-word snapshots on weak memory via the sequence.
+// It is optimized for read-heavy scenarios where readers should not block writers,
+// and consistent snapshots are required.
 //
 // Usage:
 //
-//	Pair with seqlockSlot[T]. Use Read/Write helpers or the Locked
+//	Pair with SeqLockSlot[T]. Use Read/Write helpers or the Locked
 //	variants when an external lock is held.
-type seqlock struct {
-	seq uintptr
-}
+type SeqLock RWLock
 
-// BeginRead enters the reader window if seq is even.
-// Returns the observed sequence and ok=true when even.
+// BeginRead starts a read transaction.
+// It returns the current sequence number and true if the lock is free (sequence is even).
 //
 //go:nosplit
-func (sl *seqlock) BeginRead() (s1 uintptr, ok bool) {
-	s1 = atomic.LoadUintptr(&sl.seq)
+func (l *SeqLock) BeginRead() (s1 uintptr, ok bool) {
+	if opt.Race_ {
+		(*RWLock)(l).RLock()
+		s1 = atomic.LoadUintptr((*uintptr)(l))
+		return s1, true
+	}
+
+	s1 = atomic.LoadUintptr((*uintptr)(l))
 	return s1, s1&1 == 0
 }
 
-// EndRead verifies the window stability: returns true if seq unchanged.
+// EndRead finishes a read transaction.
+// It returns true if the sequence number matches s1, indicating a consistent snapshot.
 //
 //go:nosplit
-func (sl *seqlock) EndRead(s1 uintptr) (ok bool) {
-	s2 := atomic.LoadUintptr(&sl.seq)
+func (l *SeqLock) EndRead(s1 uintptr) (ok bool) {
+	if opt.Race_ {
+		(*RWLock)(l).RUnlock()
+		return true
+	}
+	s2 := atomic.LoadUintptr((*uintptr)(l))
 	return s1 == s2
 }
 
-// BeginWrite enters the writer window by CASing seq to odd.
-// Returns previous sequence and ok=true on success.
+// BeginWrite starts a write transaction by incrementing the sequence to odd.
+// It returns the previous sequence number and true if successful.
 //
 //go:nosplit
-func (sl *seqlock) BeginWrite() (s1 uintptr, ok bool) {
-	s1 = atomic.LoadUintptr(&sl.seq)
+func (l *SeqLock) BeginWrite() (s1 uintptr, ok bool) {
+	if opt.Race_ {
+		(*RWLock)(l).Lock()
+		return 1, true
+	}
+	s1 = atomic.LoadUintptr((*uintptr)(l))
 	if s1&1 != 0 {
 		return s1, false
 	}
-	return s1, atomic.CompareAndSwapUintptr(&sl.seq, s1, s1|1)
+	return s1, atomic.CompareAndSwapUintptr((*uintptr)(l), s1, s1|1)
 }
 
-// EndWrite exits the writer window by storing seq+2 (even).
+// EndWrite finishes a write transaction by incrementing the sequence to even.
 //
 //go:nosplit
-func (sl *seqlock) EndWrite(s1 uintptr) {
-	atomic.StoreUintptr(&sl.seq, s1+2)
+func (l *SeqLock) EndWrite(s1 uintptr) {
+	if opt.Race_ {
+		(*RWLock)(l).Unlock()
+		return
+	}
+	atomic.StoreUintptr((*uintptr)(l), s1+2)
 }
 
-// BeginWriteLocked enters the writer window using add (odd).
+// BeginWriteLocked starts a write transaction assuming an external lock is held.
+//
+//go:nosplit
+func (l *SeqLock) BeginWriteLocked() {
+	if opt.Race_ {
+		(*RWLock)(l).Lock()
+		return
+	}
+	atomic.AddUintptr((*uintptr)(l), 1)
+}
+
+// EndWriteLocked finishes a write transaction assuming an external lock is held.
+//
+//go:nosplit
+func (l *SeqLock) EndWriteLocked() {
+	if opt.Race_ {
+		(*RWLock)(l).Unlock()
+		return
+	}
+	atomic.AddUintptr((*uintptr)(l), 1)
+}
+
+// ClearLocked resets the lock state.
 // Only safe when an external lock is held.
 //
 //go:nosplit
-func (sl *seqlock) BeginWriteLocked() {
-	atomic.AddUintptr(&sl.seq, 1)
+func (l *SeqLock) ClearLocked() {
+	atomic.StoreUintptr((*uintptr)(l), 0)
 }
 
-// EndWriteLocked exits the writer window using add (even).
-// Only safe when an external lock is held.
+// CanRead reports whether the lock is currently free (even sequence).
 //
 //go:nosplit
-func (sl *seqlock) EndWriteLocked() {
-	atomic.AddUintptr(&sl.seq, 1)
+func (l *SeqLock) CanRead() bool {
+	return (*RWLock)(l).CanRead()
 }
 
-// WriteCompleted returns true if seq is non-zero and even.
+// SeqLock32 is a 32-bit sequence lock.
+type SeqLock32 RWLock32
+
+// BeginRead starts a read transaction.
+// It returns the current sequence number and true if the lock is free (sequence is even).
 //
 //go:nosplit
-func (sl *seqlock) WriteCompleted() (ok bool) {
-	s1 := atomic.LoadUintptr(&sl.seq)
-	return s1 != 0 && s1&1 == 0
-}
-
-// seqlock32 coordinates tear-free publication for a single slot.
-type seqlock32 struct {
-	seq uint32
-}
-
-// BeginRead enters the reader window if seq is even.
-// Returns the observed sequence and ok=true when even.
-//
-//go:nosplit
-func (sl *seqlock32) BeginRead() (s1 uint32, ok bool) {
-	s1 = atomic.LoadUint32(&sl.seq)
+func (l *SeqLock32) BeginRead() (s1 uint32, ok bool) {
+	if opt.Race_ {
+		(*RWLock32)(l).RLock()
+		s1 = atomic.LoadUint32((*uint32)(l))
+		return s1, true
+	}
+	s1 = atomic.LoadUint32((*uint32)(l))
 	return s1, s1&1 == 0
 }
 
-// EndRead verifies the window stability: returns true if seq unchanged.
+// EndRead finishes a read transaction.
+// It returns true if the sequence number matches s1, indicating a consistent snapshot.
 //
 //go:nosplit
-func (sl *seqlock32) EndRead(s1 uint32) (ok bool) {
-	s2 := atomic.LoadUint32(&sl.seq)
+func (l *SeqLock32) EndRead(s1 uint32) (ok bool) {
+	if opt.Race_ {
+		(*RWLock32)(l).RUnlock()
+		return true
+	}
+	s2 := atomic.LoadUint32((*uint32)(l))
 	return s1 == s2
 }
 
-// BeginWrite enters the writer window by CASing seq to odd.
-// Returns previous sequence and ok=true on success.
+// BeginWrite starts a write transaction by incrementing the sequence to odd.
+// It returns the previous sequence number and true if successful.
 //
 //go:nosplit
-func (sl *seqlock32) BeginWrite() (s1 uint32, ok bool) {
-	s1 = atomic.LoadUint32(&sl.seq)
+func (l *SeqLock32) BeginWrite() (s1 uint32, ok bool) {
+	if opt.Race_ {
+		(*RWLock32)(l).Lock()
+		return 1, true
+	}
+	s1 = atomic.LoadUint32((*uint32)(l))
 	if s1&1 != 0 {
 		return s1, false
 	}
-	return s1, atomic.CompareAndSwapUint32(&sl.seq, s1, s1|1)
+	return s1, atomic.CompareAndSwapUint32((*uint32)(l), s1, s1|1)
 }
 
-// EndWrite exits the writer window by storing seq+2 (even).
+// EndWrite finishes a write transaction by incrementing the sequence to even.
 //
 //go:nosplit
-func (sl *seqlock32) EndWrite(s1 uint32) {
-	atomic.StoreUint32(&sl.seq, s1+2)
+func (l *SeqLock32) EndWrite(s1 uint32) {
+	if opt.Race_ {
+		(*RWLock32)(l).Unlock()
+		return
+	}
+	atomic.StoreUint32((*uint32)(l), s1+2)
 }
 
-// BeginWriteLocked enters the writer window using add (odd).
+// BeginWriteLocked starts a write transaction assuming an external lock is held.
+//
+//go:nosplit
+func (l *SeqLock32) BeginWriteLocked() {
+	if opt.Race_ {
+		(*RWLock32)(l).Lock()
+		return
+	}
+	atomic.AddUint32((*uint32)(l), 1)
+}
+
+// EndWriteLocked finishes a write transaction assuming an external lock is held.
+//
+//go:nosplit
+func (l *SeqLock32) EndWriteLocked() {
+	if opt.Race_ {
+		(*RWLock32)(l).Unlock()
+		return
+	}
+	atomic.AddUint32((*uint32)(l), 1)
+}
+
+// ClearLocked resets the lock state.
 // Only safe when an external lock is held.
 //
 //go:nosplit
-func (sl *seqlock32) BeginWriteLocked() {
-	atomic.AddUint32(&sl.seq, 1)
+func (l *SeqLock32) ClearLocked() {
+	atomic.StoreUint32((*uint32)(l), 0)
 }
 
-// EndWriteLocked exits the writer window using add (even).
-// Only safe when an external lock is held.
+// CanRead reports whether the lock is currently free (even sequence).
 //
 //go:nosplit
-func (sl *seqlock32) EndWriteLocked() {
-	atomic.AddUint32(&sl.seq, 1)
+func (l *SeqLock32) CanRead() bool {
+	return (*RWLock32)(l).CanRead()
 }
 
-// WriteCompleted returns true if seq is non-zero and even.
-//
-//go:nosplit
-func (sl *seqlock32) WriteCompleted() (ok bool) {
-	s1 := atomic.LoadUint32(&sl.seq)
-	return s1 != 0 && s1&1 == 0
-}
-
-// seqlockSlot[T] holds an inline buffer of T. Used with seqlock to
-// publish tear-free snapshots.
+// SeqLockSlot[T] holds a value protected by a SeqLock.
 //
 // Copy semantics:
 //   - Reads: On TSO (amd64/386/s390x), plain typed copies are sufficient.
@@ -163,20 +214,19 @@ func (sl *seqlock32) WriteCompleted() (ok bool) {
 //     and avoid publishing pointers via uintptr/unsafe stores.
 //
 // Safety:
-//   - ReadUnfenced/WriteUnfenced must run under a seqlock-stable window or
-//     an external lock; otherwise torn reads/writes are possible.
-type seqlockSlot[T any] struct {
+//   - ReadUnfenced/WriteUnfenced must be called within a SeqLock transaction
+//     or under an external lock.
+type SeqLockSlot[T any] struct {
 	_   [0]atomic.Uintptr
 	buf T
 }
 
-// ReadUnfenced copies buf into v using uintptr-sized atomic loads when
-// alignment and size permit on weak memory models to avoid reordering;
-// otherwise falls back to a typed copy.
-// Must be called under a lock or within a seqlock-stable window.
+// ReadUnfenced copies the value from the slot.
+// It uses atomic loads on weak memory models if possible to avoid reordering.
+// Must be called within a SeqLock read transaction or under a lock.
 //
 //go:nosplit
-func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
+func (slot *SeqLockSlot[T]) ReadUnfenced() (v T) {
 	if !isTSO_ {
 		if unsafe.Sizeof(slot.buf) == 0 {
 			return v
@@ -233,7 +283,7 @@ func (slot *seqlockSlot[T]) ReadUnfenced() (v T) {
 // Must be called under a lock or within a seqlock-stable window.
 //
 //go:nosplit
-func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
+func (slot *SeqLockSlot[T]) WriteUnfenced(v T) {
 	slot.buf = v
 }
 
@@ -242,27 +292,24 @@ func (slot *seqlockSlot[T]) WriteUnfenced(v T) {
 // odd/even sequence; otherwise readers may observe torn data.
 //
 //go:nosplit
-func (slot *seqlockSlot[T]) Ptr() *T {
+func (slot *SeqLockSlot[T]) Ptr() *T {
 	return &slot.buf
 }
 
-// seqRead atomically loads a tear-free snapshot using the external seqlock.
+// SeqLockRead atomically loads a tear-free snapshot using the external SeqLock.
 // Spins until seq is even and unchanged across two reads; copies the value
 // within the stable window.
-//
-//nolint:unused
-func seqRead[T any](sl *seqlock, slot *seqlockSlot[T]) (v T) {
+func SeqLockRead[T any](sl *SeqLock, slot *SeqLockSlot[T]) (v T) {
 	if s1, ok := sl.BeginRead(); ok {
 		v = slot.ReadUnfenced()
 		if ok = sl.EndRead(s1); ok {
 			return v
 		}
 	}
-	return seqSlowRead(sl, slot)
+	return seqLockReadSlow(sl, slot)
 }
 
-//nolint:unused
-func seqSlowRead[T any](sl *seqlock, slot *seqlockSlot[T]) (v T) {
+func seqLockReadSlow[T any](sl *SeqLock, slot *SeqLockSlot[T]) (v T) {
 	var spins int
 	for {
 		if s1, ok := sl.BeginRead(); ok {
@@ -276,54 +323,48 @@ func seqSlowRead[T any](sl *seqlock, slot *seqlockSlot[T]) (v T) {
 	}
 }
 
-// seqWrite publishes v guarded by the external seqlock.
+// SeqLockWrite publishes v guarded by the external SeqLock.
 // Enters odd, copies v, then exits to even to publish a stable snapshot.
-//
-//nolint:unused
-func seqWrite[T any](sl *seqlock, slot *seqlockSlot[T], v T) {
-	if s1, ok := sl.BeginWrite(); ok {
+func SeqLockWrite[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
+	if s1, ok := l.BeginWrite(); ok {
 		slot.WriteUnfenced(v)
-		sl.EndWrite(s1)
+		l.EndWrite(s1)
 		return
 	}
-	seqSlowWrite(sl, slot, v)
+	seqLockWriteSlow(l, slot, v)
 }
 
-//nolint:unused
-func seqSlowWrite[T any](sl *seqlock, slot *seqlockSlot[T], v T) {
+func seqLockWriteSlow[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
 	var spins int
 	for {
-		if s1, ok := sl.BeginWrite(); ok {
+		if s1, ok := l.BeginWrite(); ok {
 			slot.WriteUnfenced(v)
-			sl.EndWrite(s1)
+			l.EndWrite(s1)
 			return
 		}
 		delay(&spins)
 	}
 }
 
-// seqRead32 atomically loads a tear-free snapshot using the external seqlock.
+// SeqLockRead32 atomically loads a tear-free snapshot using the external SeqLock.
 // Spins until seq is even and unchanged across two reads; copies the value
 // within the stable window.
-//
-//nolint:unused
-func seqRead32[T any](sl *seqlock32, slot *seqlockSlot[T]) (v T) {
-	if s1, ok := sl.BeginRead(); ok {
+func SeqLockRead32[T any](l *SeqLock32, slot *SeqLockSlot[T]) (v T) {
+	if s1, ok := l.BeginRead(); ok {
 		v = slot.ReadUnfenced()
-		if ok = sl.EndRead(s1); ok {
+		if ok = l.EndRead(s1); ok {
 			return v
 		}
 	}
-	return seqSlowRead32(sl, slot)
+	return seqLockRead32Slow(l, slot)
 }
 
-//nolint:unused
-func seqSlowRead32[T any](sl *seqlock32, slot *seqlockSlot[T]) (v T) {
+func seqLockRead32Slow[T any](l *SeqLock32, slot *SeqLockSlot[T]) (v T) {
 	var spins int
 	for {
-		if s1, ok := sl.BeginRead(); ok {
+		if s1, ok := l.BeginRead(); ok {
 			v = slot.ReadUnfenced()
-			if ok = sl.EndRead(s1); ok {
+			if ok = l.EndRead(s1); ok {
 				return v
 			}
 			continue
@@ -332,44 +373,43 @@ func seqSlowRead32[T any](sl *seqlock32, slot *seqlockSlot[T]) (v T) {
 	}
 }
 
-// seqWrite32 publishes v guarded by the external seqlock.
+// SeqLockWrite32 publishes v guarded by the external SeqLock.
 // Enters odd, copies v, then exits to even to publish a stable snapshot.
-//
-//nolint:unused
-func seqWrite32[T any](sl *seqlock32, slot *seqlockSlot[T], v T) {
-	if s1, ok := sl.BeginWrite(); ok {
+func SeqLockWrite32[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
+	if s1, ok := l.BeginWrite(); ok {
 		slot.WriteUnfenced(v)
-		sl.EndWrite(s1)
+		l.EndWrite(s1)
 		return
 	}
-	seqSlowWrite32(sl, slot, v)
+	seqLockWrite32Slow(l, slot, v)
 }
 
-//nolint:unused
-func seqSlowWrite32[T any](sl *seqlock32, slot *seqlockSlot[T], v T) {
+func seqLockWrite32Slow[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
 	var spins int
 	for {
-		if s1, ok := sl.BeginWrite(); ok {
+		if s1, ok := l.BeginWrite(); ok {
 			slot.WriteUnfenced(v)
-			sl.EndWrite(s1)
+			l.EndWrite(s1)
 			return
 		}
 		delay(&spins)
 	}
 }
 
-//nolint:unused
+// SeqLockWriteLocked publishes v assuming an external lock is held.
+//
 //go:nosplit
-func seqWriteLocked[T any](sl *seqlock, slot *seqlockSlot[T], v T) {
-	sl.BeginWriteLocked()
+func SeqLockWriteLocked[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
+	l.BeginWriteLocked()
 	slot.WriteUnfenced(v)
-	sl.EndWriteLocked()
+	l.EndWriteLocked()
 }
 
-//nolint:unused
+// SeqLockWriteLocked32 publishes v assuming an external lock is held.
+//
 //go:nosplit
-func seqWriteLocked32[T any](sl *seqlock32, slot *seqlockSlot[T], v T) {
-	sl.BeginWriteLocked()
+func SeqLockWriteLocked32[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
+	l.BeginWriteLocked()
 	slot.WriteUnfenced(v)
-	sl.EndWriteLocked()
+	l.EndWriteLocked()
 }

@@ -10,16 +10,14 @@ const Race_ = false
 
 // Sema is a zero-allocation semaphore optimized for performance.
 // In !race mode, it is a direct wrapper around runtime.semacquire/semrelease.
-type Sema struct {
-	val uint32
-}
+type Sema uint32
 
 func (s *Sema) Acquire() {
-	runtime_semacquire(&s.val)
+	runtime_semacquire((*uint32)(s))
 }
 
 func (s *Sema) Release() {
-	runtime_semrelease(&s.val, false, 0)
+	runtime_semrelease((*uint32)(s), false, 0)
 }
 
 //go:linkname runtime_semacquire sync.runtime_Semacquire
