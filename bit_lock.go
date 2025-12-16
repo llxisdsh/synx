@@ -13,18 +13,18 @@ func BitLockUint64(addr *uint64, mask uint64) {
 	if atomic.CompareAndSwapUint64(addr, cur&^mask, cur|mask) {
 		return
 	}
-	slowLockUint64(addr, mask)
+	slowBitLockUint64(addr, mask)
 }
 
-func slowLockUint64(addr *uint64, mask uint64) {
+func slowBitLockUint64(addr *uint64, mask uint64) {
 	var spins int
-	for !tryLockUint64(addr, mask) {
+	for !tryBitLockUint64(addr, mask) {
 		delay(&spins)
 	}
 }
 
 //go:nosplit
-func tryLockUint64(addr *uint64, mask uint64) bool {
+func tryBitLockUint64(addr *uint64, mask uint64) bool {
 	for {
 		cur := atomic.LoadUint64(addr)
 		if cur&mask != 0 {
@@ -59,18 +59,18 @@ func BitLockUint32(addr *uint32, mask uint32) {
 	if atomic.CompareAndSwapUint32(addr, cur&^mask, cur|mask) {
 		return
 	}
-	slowLockUint32(addr, mask)
+	slowBitLockUint32(addr, mask)
 }
 
-func slowLockUint32(addr *uint32, mask uint32) {
+func slowBitLockUint32(addr *uint32, mask uint32) {
 	var spins int
-	for !tryLockUint32(addr, mask) {
+	for !tryBitLockUint32(addr, mask) {
 		delay(&spins)
 	}
 }
 
 //go:nosplit
-func tryLockUint32(addr *uint32, mask uint32) bool {
+func tryBitLockUint32(addr *uint32, mask uint32) bool {
 	for {
 		cur := atomic.LoadUint32(addr)
 		if cur&mask != 0 {
@@ -102,18 +102,18 @@ func BitLockUintptr(addr *uintptr, mask uintptr) {
 	if atomic.CompareAndSwapUintptr(addr, cur&^mask, cur|mask) {
 		return
 	}
-	slowLockUintptr(addr, mask)
+	slowBitLockUintptr(addr, mask)
 }
 
-func slowLockUintptr(addr *uintptr, mask uintptr) {
+func slowBitLockUintptr(addr *uintptr, mask uintptr) {
 	var spins int
-	for !tryLockUintptr(addr, mask) {
+	for !tryBitLockUintptr(addr, mask) {
 		delay(&spins)
 	}
 }
 
 //go:nosplit
-func tryLockUintptr(addr *uintptr, mask uintptr) bool {
+func tryBitLockUintptr(addr *uintptr, mask uintptr) bool {
 	for {
 		cur := atomic.LoadUintptr(addr)
 		if cur&mask != 0 {
