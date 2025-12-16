@@ -130,6 +130,14 @@ func (e *Gate) Pulse() {
 // Wait blocks until the gate is opened (Open).
 // If the gate is already opened, it returns immediately.
 func (e *Gate) Wait() {
+	s := e.state.Load()
+	if s&gateOpenBit != 0 {
+		return
+	}
+	e.waitSlow()
+}
+
+func (e *Gate) waitSlow() {
 	for {
 		s := e.state.Load()
 

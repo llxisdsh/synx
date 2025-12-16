@@ -312,14 +312,14 @@ func firstMarkedByteIndex(w uint64) int {
 //   - This SWAR algorithm identifies byte positions containing zero values.
 //   - The operation (w - 0x0101010101010101) triggers underflow for zero-value
 //     bytes, causing their most significant bit (MSB) to flip to 1.
-//   - The subsequent & (^w) operation isolates the MSB markers specifically for
+//   - The subsequent &^ operation isolates the MSB markers specifically for
 //     bytes, that were originally zero.
-//   - Finally, & emptyMetaMask filters to only consider relevant data slots,
+//   - Finally, & metaMask filters to only consider relevant data slots,
 //     using the mask-defined marker bits (MSB of each byte).
 //
 //go:nosplit
 func markZeroBytes(w uint64) uint64 {
-	return (w - 0x0101010101010101) & (^w) & metaMask
+	return (w - 0x0101010101010101) &^ w & metaMask
 }
 
 // setByte sets the byte at index idx in the uint64 w to the value b.

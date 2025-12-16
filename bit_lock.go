@@ -10,7 +10,7 @@ import "sync/atomic"
 // to save memory and avoid false sharing.
 func BitLockUint64(addr *uint64, mask uint64) {
 	cur := atomic.LoadUint64(addr)
-	if atomic.CompareAndSwapUint64(addr, cur&(^mask), cur|mask) {
+	if atomic.CompareAndSwapUint64(addr, cur&^mask, cur|mask) {
 		return
 	}
 	slowLockUint64(addr, mask)
@@ -56,7 +56,7 @@ func BitUnlockWithStoreUint64(addr *uint64, mask uint64, value uint64) {
 // BitLockUint32 acquires a bit-lock on the given address using the specified bit mask.
 func BitLockUint32(addr *uint32, mask uint32) {
 	cur := atomic.LoadUint32(addr)
-	if atomic.CompareAndSwapUint32(addr, cur&(^mask), cur|mask) {
+	if atomic.CompareAndSwapUint32(addr, cur&^mask, cur|mask) {
 		return
 	}
 	slowLockUint32(addr, mask)
@@ -99,7 +99,7 @@ func BitUnlockWithStoreUint32(addr *uint32, mask uint32, value uint32) {
 // BitLockUintptr acquires a bit-lock on the given address using the specified bit mask.
 func BitLockUintptr(addr *uintptr, mask uintptr) {
 	cur := atomic.LoadUintptr(addr)
-	if atomic.CompareAndSwapUintptr(addr, cur&(^mask), cur|mask) {
+	if atomic.CompareAndSwapUintptr(addr, cur&^mask, cur|mask) {
 		return
 	}
 	slowLockUintptr(addr, mask)

@@ -9,23 +9,29 @@ import (
 type RWLock uintptr
 
 const (
-	rwWriteMask = 1
-	rwReadShift = 2
-	rwReadUnit  = 1 << rwReadShift
-	rwFreeState = 2 // 2 (binary 10) means initialized, no writer, no readers
+	rwWriteLockMask = 1 // bit 0 means writer is holding the lock
+	rwWriteMarkMask = 2 // bit 1 means writer has marked the lock
+	rwReadShift     = 2 // bits 2+ mean reader count
+	rwReadUnit      = 1 << rwReadShift
 )
 
 // Lock acquires the write lock.
 // It spins until the lock is free.
-//
-//go:nosplit
 func (l *RWLock) Lock() {
+	s := atomic.LoadUintptr((*uintptr)(l)) & rwWriteMarkMask
+	if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s|rwWriteLockMask) {
+		return
+	}
+	l.lockSlow()
+}
+
+func (l *RWLock) lockSlow() {
 	var spins int
 	for {
 		// 1. Acquire Write Bit (Bit 0). This blocks NEW readers.
 		s := atomic.LoadUintptr((*uintptr)(l))
-		if s&rwWriteMask == 0 {
-			if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s|rwWriteMask) {
+		if s&rwWriteLockMask == 0 {
+			if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s|rwWriteLockMask) {
 				// Acquired Write Bit.
 				// 2. Wait for existing Readers to drain.
 				// Note: Readers are bits 2+. Bit 1 is the "initialized" bit (value 2).
@@ -44,30 +50,32 @@ func (l *RWLock) Lock() {
 }
 
 // Unlock releases the write lock.
-// It resets the state to rwFreeState (2), indicating "initialized and free".
-//
-//go:nosplit
+// It resets the state to rwWriteCountMask (2), indicating "initialized and free".
 func (l *RWLock) Unlock() {
-	atomic.StoreUintptr((*uintptr)(l), rwFreeState)
+	atomic.StoreUintptr((*uintptr)(l), rwWriteMarkMask)
 }
 
 // CanRead reports whether the lock allows reading (no writer holding or waiting)
 // and the value is non-zero (initialized).
-//
-//go:nosplit
 func (l *RWLock) CanRead() bool {
 	s := atomic.LoadUintptr((*uintptr)(l))
-	return s != 0 && s&rwWriteMask == 0
+	return s != 0 && s&rwWriteLockMask == 0
 }
 
 // RLock acquires a read lock.
-//
-//go:nosplit
 func (l *RWLock) RLock() {
+	s := atomic.LoadUintptr((*uintptr)(l)) &^ rwWriteLockMask
+	if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s+rwReadUnit) {
+		return
+	}
+	l.rLockSlow()
+}
+
+func (l *RWLock) rLockSlow() {
 	var spins int
 	for {
 		s := atomic.LoadUintptr((*uintptr)(l))
-		if s&rwWriteMask == 0 { // No writer
+		if s&rwWriteLockMask == 0 { // No writer
 			if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s+rwReadUnit) {
 				return
 			}
@@ -77,8 +85,6 @@ func (l *RWLock) RLock() {
 }
 
 // RUnlock releases a read lock.
-//
-//go:nosplit
 func (l *RWLock) RUnlock() {
 	atomic.AddUintptr((*uintptr)(l), ^uintptr(rwReadUnit-1))
 }
@@ -88,14 +94,20 @@ func (l *RWLock) RUnlock() {
 type RWLock32 uint32
 
 // Lock acquires the write lock.
-//
-//go:nosplit
 func (l *RWLock32) Lock() {
+	s := atomic.LoadUint32((*uint32)(l)) & rwWriteMarkMask
+	if atomic.CompareAndSwapUint32((*uint32)(l), s, s|rwWriteLockMask) {
+		return
+	}
+	l.lockSlow()
+}
+
+func (l *RWLock32) lockSlow() {
 	var spins int
 	for {
 		s := atomic.LoadUint32((*uint32)(l))
-		if s&rwWriteMask == 0 {
-			if atomic.CompareAndSwapUint32((*uint32)(l), s, s|rwWriteMask) {
+		if s&rwWriteLockMask == 0 {
+			if atomic.CompareAndSwapUint32((*uint32)(l), s, s|rwWriteLockMask) {
 				for {
 					s2 := atomic.LoadUint32((*uint32)(l))
 					if s2>>rwReadShift == 0 {
@@ -110,21 +122,25 @@ func (l *RWLock32) Lock() {
 }
 
 // Unlock releases the write lock.
-//
-//go:nosplit
 func (l *RWLock32) Unlock() {
-	atomic.StoreUint32((*uint32)(l), uint32(rwFreeState))
+	atomic.StoreUint32((*uint32)(l), rwWriteMarkMask)
 }
 
 // RLock acquires a read lock.
-//
-//go:nosplit
 func (l *RWLock32) RLock() {
+	s := atomic.LoadUint32((*uint32)(l)) &^ rwWriteLockMask
+	if atomic.CompareAndSwapUint32((*uint32)(l), s, s+rwReadUnit) {
+		return
+	}
+	l.rLockSlow()
+}
+
+func (l *RWLock32) rLockSlow() {
 	var spins int
 	for {
 		s := atomic.LoadUint32((*uint32)(l))
-		if s&rwWriteMask == 0 {
-			if atomic.CompareAndSwapUint32((*uint32)(l), s, s+uint32(rwReadUnit)) {
+		if s&rwWriteLockMask == 0 {
+			if atomic.CompareAndSwapUint32((*uint32)(l), s, s+rwReadUnit) {
 				return
 			}
 		}
@@ -133,17 +149,13 @@ func (l *RWLock32) RLock() {
 }
 
 // RUnlock releases a read lock.
-//
-//go:nosplit
 func (l *RWLock32) RUnlock() {
 	atomic.AddUint32((*uint32)(l), ^uint32(rwReadUnit-1))
 }
 
 // CanRead reports whether the lock allows reading (no writer holding or waiting)
 // and the value is non-zero (initialized).
-//
-//go:nosplit
 func (l *RWLock32) CanRead() bool {
 	s := atomic.LoadUint32((*uint32)(l))
-	return s != 0 && s&rwWriteMask == 0
+	return s != 0 && s&rwWriteLockMask == 0
 }

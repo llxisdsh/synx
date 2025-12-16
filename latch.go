@@ -47,6 +47,14 @@ func (e *Latch) Open() {
 // Wait blocks until Open is called.
 // If Open has already been called, it returns immediately.
 func (e *Latch) Wait() {
+	s := e.state.Load()
+	if s&latchDoneFlag != 0 {
+		return
+	}
+	e.waitSlow()
+}
+
+func (e *Latch) waitSlow() {
 	for {
 		s := e.state.Load()
 		if s&latchDoneFlag != 0 {
