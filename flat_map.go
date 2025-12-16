@@ -359,7 +359,7 @@ func (m *FlatMap[K, V]) Compute(
 		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
 			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if m.rs.newTableSeq.CanRead() {
+				if m.rs.newTableSeq.Ready() {
 					root.Unlock()
 					m.helpCopyAndWait(&m.rs)
 					continue
@@ -710,7 +710,7 @@ func (m *FlatMap[K, V]) rebuild(
 		if hint := mapRebuildHint(m.rs.hint.Load()); hint != mapNoHint {
 			switch hint {
 			case mapGrowHint, mapShrinkHint:
-				if m.rs.newTableSeq.CanRead() {
+				if m.rs.newTableSeq.Ready() {
 					m.helpCopyAndWait(&m.rs)
 				} else {
 					runtime.Gosched()

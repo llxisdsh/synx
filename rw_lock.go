@@ -55,9 +55,9 @@ func (l *RWLock) Unlock() {
 	atomic.StoreUintptr((*uintptr)(l), rwWriteMarkMask)
 }
 
-// CanRead reports whether the lock allows reading (no writer holding or waiting)
-// and the value is non-zero (initialized).
-func (l *RWLock) CanRead() bool {
+// Ready reports whether the lock has been unlocked at least once and is currently free.
+// It is useful for checking if the protected data has been initialized.
+func (l *RWLock) Ready() bool {
 	s := atomic.LoadUintptr((*uintptr)(l))
 	return s != 0 && s&rwWriteLockMask == 0
 }
@@ -153,9 +153,9 @@ func (l *RWLock32) RUnlock() {
 	atomic.AddUint32((*uint32)(l), ^uint32(rwReadUnit-1))
 }
 
-// CanRead reports whether the lock allows reading (no writer holding or waiting)
-// and the value is non-zero (initialized).
-func (l *RWLock32) CanRead() bool {
+// Ready reports whether the lock has been unlocked at least once and is currently free.
+// It is useful for checking if the protected data has been initialized.
+func (l *RWLock32) Ready() bool {
 	s := atomic.LoadUint32((*uint32)(l))
 	return s != 0 && s&rwWriteLockMask == 0
 }

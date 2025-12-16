@@ -45,6 +45,7 @@ func NewBarter[T any]() *Barter[T] {
 // It returns the value provided by the other goroutine.
 func (b *Barter[T]) Exchange(myValue T) T {
 	me := &barterItem[T]{value: myValue}
+	var spins int
 	// Latch is zero-usable (waiters block until Open).
 
 	// 1. Try to offer my item
@@ -74,5 +75,6 @@ func (b *Barter[T]) Exchange(myValue T) T {
 			}
 			// CAS failed, retry.
 		}
+		delay(&spins)
 	}
 }

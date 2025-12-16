@@ -41,6 +41,7 @@ const (
 // All current waiters are woken up.
 // Future calls to Wait() return immediately until Close() is called.
 func (e *Gate) Open() {
+	var spins int
 	for {
 		s := e.state.Load()
 		if s&gateOpenBit != 0 {
@@ -64,12 +65,14 @@ func (e *Gate) Open() {
 			}
 			return
 		}
+		delay(&spins)
 	}
 }
 
 // Close signals the gate (sets state to Close).
 // Future calls to Wait() will block.
 func (e *Gate) Close() {
+	var spins int
 	for {
 		s := e.state.Load()
 		if s&gateOpenBit == 0 {
@@ -90,6 +93,7 @@ func (e *Gate) Close() {
 		if e.state.CompareAndSwap(s, next) {
 			return
 		}
+		delay(&spins)
 	}
 }
 

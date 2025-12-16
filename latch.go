@@ -29,6 +29,7 @@ const (
 // Any future calls to Wait() will return immediately.
 // Open() is idempotent (can be called multiple times).
 func (e *Latch) Open() {
+	var spins int
 	for {
 		s := e.state.Load()
 		if s&latchDoneFlag != 0 {
@@ -41,6 +42,7 @@ func (e *Latch) Open() {
 			}
 			return
 		}
+		delay(&spins)
 	}
 }
 

@@ -103,11 +103,12 @@ func (l *SeqLock) ClearLocked() {
 	atomic.StoreUintptr((*uintptr)(l), 0)
 }
 
-// CanRead reports whether the lock is currently free (even sequence).
+// Ready reports whether the lock has been unlocked at least once and is currently free.
+// It is useful for checking if the protected data has been initialized.
 //
 //go:nosplit
-func (l *SeqLock) CanRead() bool {
-	return (*RWLock)(l).CanRead()
+func (l *SeqLock) Ready() bool {
+	return (*RWLock)(l).Ready()
 }
 
 // SeqLock32 is a 32-bit sequence lock.
@@ -197,14 +198,15 @@ func (l *SeqLock32) ClearLocked() {
 	atomic.StoreUint32((*uint32)(l), 0)
 }
 
-// CanRead reports whether the lock is currently free (even sequence).
+// Ready reports whether the lock has been unlocked at least once and is currently free.
+// It is useful for checking if the protected data has been initialized.
 //
 //go:nosplit
-func (l *SeqLock32) CanRead() bool {
-	return (*RWLock32)(l).CanRead()
+func (l *SeqLock32) Ready() bool {
+	return (*RWLock32)(l).Ready()
 }
 
-// SeqLockSlot[T] holds a value protected by a SeqLock.
+// SeqLockSlot holds a value protected by a SeqLock.
 //
 // Copy semantics:
 //   - Reads: On TSO (amd64/386/s390x), plain typed copies are sufficient.

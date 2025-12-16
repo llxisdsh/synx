@@ -48,6 +48,7 @@ func (b *Rally) Meet(parties int) int {
 		return 0
 	}
 
+	var spins int
 	for {
 		s := b.state.Load()
 		gen := s >> 32
@@ -72,5 +73,6 @@ func (b *Rally) Meet(parties int) int {
 			b.sema[gen%2].Acquire()
 			return int(count)
 		}
+		delay(&spins)
 	}
 }
