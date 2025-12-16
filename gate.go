@@ -138,10 +138,10 @@ func (e *Gate) Wait() {
 	if s&gateOpenBit != 0 {
 		return
 	}
-	e.waitSlow()
+	e.slowWait()
 }
 
-func (e *Gate) waitSlow() {
+func (e *Gate) slowWait() {
 	for {
 		s := e.state.Load()
 

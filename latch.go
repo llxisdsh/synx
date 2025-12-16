@@ -53,10 +53,10 @@ func (e *Latch) Wait() {
 	if s&latchDoneFlag != 0 {
 		return
 	}
-	e.waitSlow()
+	e.slowWait()
 }
 
-func (e *Latch) waitSlow() {
+func (e *Latch) slowWait() {
 	for {
 		s := e.state.Load()
 		if s&latchDoneFlag != 0 {

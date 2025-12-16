@@ -308,10 +308,10 @@ func SeqLockRead[T any](sl *SeqLock, slot *SeqLockSlot[T]) (v T) {
 			return v
 		}
 	}
-	return seqLockReadSlow(sl, slot)
+	return slowSeqLockRead(sl, slot)
 }
 
-func seqLockReadSlow[T any](sl *SeqLock, slot *SeqLockSlot[T]) (v T) {
+func slowSeqLockRead[T any](sl *SeqLock, slot *SeqLockSlot[T]) (v T) {
 	var spins int
 	for {
 		if s1, ok := sl.BeginRead(); ok {
@@ -333,10 +333,10 @@ func SeqLockWrite[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
 		l.EndWrite(s1)
 		return
 	}
-	seqLockWriteSlow(l, slot, v)
+	slowSeqLockWrite(l, slot, v)
 }
 
-func seqLockWriteSlow[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
+func slowSeqLockWrite[T any](l *SeqLock, slot *SeqLockSlot[T], v T) {
 	var spins int
 	for {
 		if s1, ok := l.BeginWrite(); ok {
@@ -358,10 +358,10 @@ func SeqLockRead32[T any](l *SeqLock32, slot *SeqLockSlot[T]) (v T) {
 			return v
 		}
 	}
-	return seqLockRead32Slow(l, slot)
+	return slowSeqLockRead32(l, slot)
 }
 
-func seqLockRead32Slow[T any](l *SeqLock32, slot *SeqLockSlot[T]) (v T) {
+func slowSeqLockRead32[T any](l *SeqLock32, slot *SeqLockSlot[T]) (v T) {
 	var spins int
 	for {
 		if s1, ok := l.BeginRead(); ok {
@@ -383,10 +383,10 @@ func SeqLockWrite32[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
 		l.EndWrite(s1)
 		return
 	}
-	seqLockWrite32Slow(l, slot, v)
+	slowSeqLockWrite32(l, slot, v)
 }
 
-func seqLockWrite32Slow[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
+func slowSeqLockWrite32[T any](l *SeqLock32, slot *SeqLockSlot[T], v T) {
 	var spins int
 	for {
 		if s1, ok := l.BeginWrite(); ok {

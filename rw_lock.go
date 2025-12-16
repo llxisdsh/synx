@@ -22,10 +22,10 @@ func (l *RWLock) Lock() {
 	if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s|rwWriteLockMask) {
 		return
 	}
-	l.lockSlow()
+	l.slowLock()
 }
 
-func (l *RWLock) lockSlow() {
+func (l *RWLock) slowLock() {
 	var spins int
 	for {
 		// 1. Acquire Write Bit (Bit 0). This blocks NEW readers.
@@ -68,10 +68,10 @@ func (l *RWLock) RLock() {
 	if atomic.CompareAndSwapUintptr((*uintptr)(l), s, s+rwReadUnit) {
 		return
 	}
-	l.rLockSlow()
+	l.slowRLock()
 }
 
-func (l *RWLock) rLockSlow() {
+func (l *RWLock) slowRLock() {
 	var spins int
 	for {
 		s := atomic.LoadUintptr((*uintptr)(l))
@@ -99,10 +99,10 @@ func (l *RWLock32) Lock() {
 	if atomic.CompareAndSwapUint32((*uint32)(l), s, s|rwWriteLockMask) {
 		return
 	}
-	l.lockSlow()
+	l.slowLock()
 }
 
-func (l *RWLock32) lockSlow() {
+func (l *RWLock32) slowLock() {
 	var spins int
 	for {
 		s := atomic.LoadUint32((*uint32)(l))
@@ -132,10 +132,10 @@ func (l *RWLock32) RLock() {
 	if atomic.CompareAndSwapUint32((*uint32)(l), s, s+rwReadUnit) {
 		return
 	}
-	l.rLockSlow()
+	l.slowRLock()
 }
 
-func (l *RWLock32) rLockSlow() {
+func (l *RWLock32) slowRLock() {
 	var spins int
 	for {
 		s := atomic.LoadUint32((*uint32)(l))
