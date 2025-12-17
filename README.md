@@ -2,6 +2,9 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/llxisdsh/synx.svg)](https://pkg.go.dev/github.com/llxisdsh/synx)
 
+> **Notice**: This project has been migrated to [**C**oncurrent **C**ore](https://github.com/llxisdsh/cc).
+> `synx` is a stable release and can be used safely, but ongoing development continues in `cc`.
+
 **synx** is a lightweight, high-performance concurrency toolkit for Go, designed for critical paths where latency and allocation matter.
 
 ## Installation
