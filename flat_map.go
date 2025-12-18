@@ -38,11 +38,11 @@ type FlatMap[K comparable, V any] struct {
 
 type flatRebuildState[K comparable, V any] struct {
 	hint        atomic.Uint32
-	chunks      int32
+	chunks      atomic.Int32
 	newTable    SeqLockSlot[flatTable[K, V]]
 	newTableSeq SeqLock32 // seqlock of new table
-	process     int32     // atomic
-	completed   int32     // atomic
+	process     atomic.Int32
+	completed   atomic.Int32
 	gate        Gate
 }
 
@@ -684,9 +684,9 @@ func (m *FlatMap[K, V]) beginRebuild(hint mapRebuildHint) (*flatRebuildState[K, 
 	if !rs.hint.CompareAndSwap(uint32(mapNoHint), uint32(hint)) {
 		return rs, false
 	}
-	rs.chunks = 0
-	rs.process = 0
-	rs.completed = 0
+	rs.chunks.Store(0)
+	rs.process.Store(0)
+	rs.completed.Store(0)
 	rs.newTable = SeqLockSlot[flatTable[K, V]]{}
 	rs.newTableSeq.ClearLocked()
 	rs.gate.Close()
@@ -782,7 +782,7 @@ func (m *FlatMap[K, V]) finalizeResize(
 ) {
 	overCpus := cpus * resizeOverPartition
 	chunks := calcParallelism(table.mask+1, minBucketsPerCPU, overCpus)
-	rs.chunks = int32(chunks)
+	rs.chunks.Store(int32(chunks))
 	SeqLockWriteLocked32(&rs.newTableSeq, &rs.newTable,
 		newFlatTable[K, V](newLen, cpus)) // Release rs
 	m.helpCopyAndWait(rs)
@@ -794,7 +794,10 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	newTable := SeqLockRead32(&rs.newTableSeq, &rs.newTable) // Acquire rs
 	if newTable.buckets.ptr == nil ||
 		newTable.buckets.ptr == table.buckets.ptr {
-		rs.gate.Wait()
+		return
+	}
+	chunks := rs.chunks.Load()
+	if chunks == 0 {
 		return
 	}
 	oldLen := table.mask + 1
@@ -808,10 +811,10 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 	// (srcIdx += baseLen) in the inner loop, a single goroutine exclusively
 	// owns the write operations for its assigned destination buckets.
 	baseLen := min(newLen, oldLen)
-	chunks := rs.chunks
+
 	chunkSz := (baseLen + int(chunks) - 1) / int(chunks)
 	for {
-		process := atomic.AddInt32(&rs.process, 1)
+		process := rs.process.Add(1)
 		if process > chunks {
 			rs.gate.Wait()
 			return
@@ -820,7 +823,7 @@ func (m *FlatMap[K, V]) helpCopyAndWait(rs *flatRebuildState[K, V]) {
 		start := int(process) * chunkSz
 		end := min(start+chunkSz, baseLen)
 		m.copyBucket(&table, start, end, oldLen, baseLen, &newTable)
-		if atomic.AddInt32(&rs.completed, 1) == chunks {
+		if rs.completed.Add(1) == chunks {
 			SeqLockWriteLocked32(&m.tableSeq, &m.table, newTable)
 			m.endRebuild(rs)
 			return
